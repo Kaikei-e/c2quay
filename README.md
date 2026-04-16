@@ -2,7 +2,9 @@
 
 **Contract-gated releases for Docker Compose.**
 
-> ⚠️ **Status: Design stage.** Architecture and CLI surface are being designed in the open. Not ready for use. Feedback and discussion welcome via Issues.
+> ⚠️ **Status: v0.3.0 — alpha.** The CLI surface (`doctor`, `verify`, `deploy`, `status`) is functional and test-covered. Feedback and bug reports welcome via Issues.
+
+> Design references: [docs/architecture.md](docs/architecture.md), [docs/adr/](docs/adr/).
 
 c2quay is a small CLI that sits between your Pact Broker and your Docker Compose deployments. It refuses to let a release go out if consumer-driven contracts say it would break something — and records the deployment back to the broker when it succeeds.
 
@@ -100,52 +102,69 @@ Show what's currently deployed per environment, per pacticipant.
 c2quay status --env production
 ```
 
-## Planned configuration
+## Configuration
 
 ```yaml
 compose:
   files:
     - compose.yaml
-    - compose.prod.yaml
   project_name: myapp
 
-pact_broker:
-  url: https://broker.example.com
+broker:
+  base_url: https://pact-broker.example.com
+  # Auth lives in env vars, never in this file:
+  #   PACT_BROKER_USERNAME / PACT_BROKER_PASSWORD  (Basic)
+  #   PACT_BROKER_TOKEN                            (Bearer)
 
 versioning:
-  strategy: git_sha   # or: image_tag, file
+  strategy: manifest_file   # or: resolved_image_digest | git_sha
+  options:
+    path: .c2quay/versions.json
+
+deploy:
+  wait: true
+  wait_timeout: 180s
+  smoke:
+    command: ./scripts/smoke.sh
+    timeout: 30s
+    env:
+      TARGET_ENV: production
 
 environments:
   production:
-    hosts:
-      - deploy@prod.example.com
+    all_or_nothing: true
     services:
       api:
         pacticipant: api
       worker:
         pacticipant: worker
-
-release:
-  smoke:
-    command: ./scripts/smoke.sh production
 ```
+
+A worked example lives in [`docs/config.example.yml`](docs/config.example.yml).
 
 The split is deliberate: Compose owns *what the service is*, c2quay owns *how the release happens*. c2quay never touches the service definition.
 
+## Requirements
+
+- Go 1.25 or later (development baseline 1.26.2).
+- Docker Compose **v2.40.2+** (CVE-2025-62725 fix). The hyphenated
+  `docker-compose` v1 is not supported.
+- A Pact Broker at v2.113 or newer, or PactFlow.
+
 ## Roadmap
 
-Rough ordering. Items will likely shift as the design meets reality.
-
-- [x] Project scaffolding
-- [ ] Config loader and schema
-- [ ] `verify` command (Pact Broker `can-i-deploy` integration)
-- [ ] `deploy` command (local Compose execution)
+- [x] Project scaffolding (`doctor`, `c2quay.yml`, slog audit log)
+- [x] Config loader and schema
+- [x] Compose adapter (shell-out, `--wait` ps cross-check)
+- [x] Versioning strategies (`manifest_file`, `resolved_image_digest`, `git_sha`)
+- [x] HAL-driven Pact Broker client
+- [x] `verify` command
+- [x] `deploy` command (local, `--dry-run`, rollback hints)
+- [x] `record-deployment` posting
+- [x] `status` command
+- [x] Smoke check hook
 - [ ] `deploy` over SSH
-- [ ] `record-deployment` posting
-- [ ] `status` command
-- [ ] Smoke check hook
-- [ ] Rollback
-- [ ] Release history
+- [ ] Automatic rollback execution
 
 ## Contributing
 
@@ -156,10 +175,11 @@ The project is pre-alpha and the design is still moving. The most useful contrib
 - **Prior art pointers.** If there's an existing tool that already does this well, I want to know before writing more code.
 
 ```bash
-git clone https://github.com/TODO/c2quay.git
+git clone https://github.com/Kaikei-e/c2quay.git
 cd c2quay
-go build -o c2quay ./cmd/c2quay
-go test ./...
+make build
+make test            # unit
+make e2e             # end-to-end (builds the binary and drives it)
 ```
 
 ## License
