@@ -69,7 +69,7 @@ func TestLoad_MissingFile(t *testing.T) {
 func TestValidate_RequiresComposeFiles(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "c.yml")
-	require.NoError(t, os.WriteFile(path, []byte(strings.ReplaceAll(readFile(t, "testdata/valid.yml"), "- compose.yaml", "")), 0o644))
+	require.NoError(t, os.WriteFile(path, []byte(strings.ReplaceAll(readFile(t, "testdata/valid.yml"), "- compose.yaml", "")), 0o600))
 	_, err := config.Load(path)
 	require.Error(t, err)
 }

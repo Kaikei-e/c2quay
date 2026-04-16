@@ -41,7 +41,7 @@ type jsonReport struct {
 func renderJSON(w io.Writer, r Report) error {
 	out := jsonReport{OK: r.AllOK()}
 	for _, res := range r.Results {
-		out.Checks = append(out.Checks, jsonEntry{Name: res.Name, OK: res.OK, Detail: res.Detail})
+		out.Checks = append(out.Checks, jsonEntry(res))
 	}
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")

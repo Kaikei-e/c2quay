@@ -43,7 +43,7 @@ func CaptureSnapshot(ctx context.Context, adapter psReader, env string, releases
 // Write serializes the snapshot as JSON Lines-friendly single JSON object into dir.
 // The filename contains the timestamp and suffix.
 func (s *Snapshot) Write(dir, suffix string) (string, error) {
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return "", fmt.Errorf("mkdir snapshots: %w", err)
 	}
 	name := fmt.Sprintf("%s-%s.json", s.CapturedAt.Format("20060102T150405Z"), suffix)

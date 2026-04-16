@@ -22,9 +22,23 @@ linters:
         - name: var-naming
         - name: exported
           disabled: true
+    errcheck:
+      # CLI output writers target os.Stdout/Stderr/caller-provided io.Writer.
+      # Errors on those are not actionable for us, and spraying `_, _ =`
+      # everywhere hurts readability.
+      exclude-functions:
+        - fmt.Fprint
+        - fmt.Fprintf
+        - fmt.Fprintln
+        - (io.Writer).Write
     gosec:
       excludes:
-        - G204   # subprocess launched with variable is intentional (we run docker/git)
+        - G204   # subprocess launched with variable is intentional (docker/git)
+        - G304   # opening files by path is intentional (CLI config/manifest)
+        - G115   # syscall.Flock uintptr->int cast is required by the API
+    misspell:
+      ignore-rules:
+        - strat   # short for "strategy"
 
 issues:
   max-issues-per-linter: 0

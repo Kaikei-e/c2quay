@@ -165,7 +165,7 @@ func (c *Client) do(ctx context.Context, method, urlStr string, body io.Reader, 
 	if err != nil {
 		return nil, 0, fmt.Errorf("%w: %v", ErrBrokerUnreachable, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	raw, readErr := io.ReadAll(resp.Body)
 	if readErr != nil {

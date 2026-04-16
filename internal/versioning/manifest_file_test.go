@@ -19,7 +19,7 @@ func TestManifestFile_Resolve(t *testing.T) {
 "services":{
   "api":{"version":"2026-04-17-abc","image":"ghcr.io/example/api@sha256:a"},
   "web":{"version":"2026-04-17-def","image":"ghcr.io/example/web@sha256:b"}
-}}`), 0o644))
+}}`), 0o600))
 
 	m := versioning.NewManifestFile(path)
 	out, err := m.Resolve(context.Background(), []string{"api", "web"})
@@ -31,7 +31,7 @@ func TestManifestFile_Resolve(t *testing.T) {
 func TestManifestFile_MissingService(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "versions.json")
-	require.NoError(t, os.WriteFile(path, []byte(`{"services":{"api":{"version":"v1"}}}`), 0o644))
+	require.NoError(t, os.WriteFile(path, []byte(`{"services":{"api":{"version":"v1"}}}`), 0o600))
 
 	m := versioning.NewManifestFile(path)
 	_, err := m.Resolve(context.Background(), []string{"api", "missing"})

@@ -25,7 +25,7 @@ func TestAcquire_SecondFails(t *testing.T) {
 	path := filepath.Join(dir, "env.lock")
 	l1, err := lock.Acquire(path)
 	require.NoError(t, err)
-	defer l1.Release()
+	t.Cleanup(func() { _ = l1.Release() })
 
 	_, err = lock.Acquire(path)
 	require.Error(t, err)

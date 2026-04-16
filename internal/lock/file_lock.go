@@ -25,7 +25,7 @@ type FileLock struct {
 // Acquire takes an exclusive non-blocking flock on path. It returns
 // ErrAlreadyHeld if another process currently holds the lock.
 func Acquire(path string) (*FileLock, error) {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
 		return nil, fmt.Errorf("create lock dir: %w", err)
 	}
 	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o600)
