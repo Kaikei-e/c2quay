@@ -1,0 +1,16 @@
+compose:
+  files:
+    - compose.yaml
+  project_name: myapp
+
+broker:
+  base_url: https://pact-broker.example.com
+
+versioning:
+  strategy: image_tag
+
+environments:
+  production:
+    services:
+      api:
+        pacticipant: api

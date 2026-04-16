@@ -1,0 +1,16 @@
+compose:
+  files:
+    - compose.yaml
+  project_name: myapp
+
+pact_broker:
+  url: https://example.com
+
+versioning:
+  strategy: git_sha
+
+environments:
+  production:
+    services:
+      api:
+        pacticipant: api
