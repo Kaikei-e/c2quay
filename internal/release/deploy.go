@@ -26,34 +26,42 @@ type DeployDeps struct {
 	Progress    io.Writer
 	Stderr      io.Writer
 	SnapshotDir string
+	// RollbackMode controls auto-rollback on compose-up / smoke failures.
+	// Zero value defaults to RollbackOn (opt-out). See ADR-0006.
+	RollbackMode RollbackMode
+	// RollbackTimeout bounds the rollback's own `compose up --wait`. Defaults
+	// to 2× Deploy.WaitTimeout, or 3 minutes if neither is set.
+	RollbackTimeout time.Duration
 }
 
 // DeployReport captures what happened, successful or not. On failure the
 // caller uses FailedAtStep to decide the exit code and whether to emit a
 // rollback hint.
 type DeployReport struct {
-	Plan            *Plan
-	Outcomes        []GateOutcome
-	Pre             *Snapshot
-	Post            *Snapshot
-	PreSnapshotFile string
+	Plan             *Plan
+	Outcomes         []GateOutcome
+	Pre              *Snapshot
+	Post             *Snapshot
+	PreSnapshotFile  string
 	PostSnapshotFile string
-	FailedAtStep    FailedStep
-	FailedCause     error
-	StartedAt       time.Time
-	FinishedAt      time.Time
+	FailedAtStep     FailedStep
+	FailedCause      error
+	Rollback         *RollbackReport
+	StartedAt        time.Time
+	FinishedAt       time.Time
 }
 
 // Deploy runs the full lock-held pipeline. The caller MUST hold an
 // environment lock for the duration of this call. See internal/lock.
 //
 // Ordering is strict:
-//   (1) pre-snapshot
-//   (2) gate check
-//   (3) compose up
-//   (4) smoke (optional)
-//   (5) record-deployment         ← always last
-//   (6) post-snapshot
+//
+//	(1) pre-snapshot
+//	(2) gate check
+//	(3) compose up
+//	(4) smoke (optional)
+//	(5) record-deployment         ← always last
+//	(6) post-snapshot
 //
 // record-deployment is never called before step 5. A failure in (1)-(4)
 // leaves the broker's view unchanged, which is what ADR 0004 requires.
@@ -137,6 +145,7 @@ func Deploy(ctx context.Context, cfg *config.Config, envName, onlyService string
 	if upErr != nil {
 		deps.UI.Fail("compose up", upErr.Error())
 		report.Post, _ = CaptureSnapshot(ctx, deps.Compose, envName, plan.Releases)
+		maybeRollback(ctx, deps, cfg, report, StepComposeUp)
 		return failReport(report, StepComposeUp, upErr)
 	}
 	deps.UI.Ok("compose up", fmt.Sprintf("%d service(s) running", len(plan.Services)))
@@ -152,6 +161,7 @@ func Deploy(ctx context.Context, cfg *config.Config, envName, onlyService string
 		if err := RunSmoke(ctx, cfg.Deploy.Smoke, envName, deps.Progress); err != nil {
 			deps.UI.Fail("smoke", err.Error())
 			report.Post, _ = CaptureSnapshot(ctx, deps.Compose, envName, plan.Releases)
+			maybeRollback(ctx, deps, cfg, report, StepSmoke)
 			return failReport(report, StepSmoke, err)
 		}
 		deps.UI.Ok("smoke", "passed")
@@ -226,4 +236,72 @@ func failReport(r *DeployReport, step FailedStep, cause error) (*DeployReport, e
 	r.FailedAtStep = step
 	r.FailedCause = cause
 	return r, cause
+}
+
+// maybeRollback runs the auto-rollback flow when policy allows and the mode
+// is not Off. Outcome (success, failure, skipped) is recorded on
+// report.Rollback; errors never shadow the original deploy failure.
+func maybeRollback(parent context.Context, deps DeployDeps, cfg *config.Config, report *DeployReport, step FailedStep) {
+	mode := ResolveRollbackMode(deps.RollbackMode)
+	if mode == RollbackOff {
+		return
+	}
+	if !PolicyFor(step) {
+		return
+	}
+	if report.Pre == nil {
+		report.Rollback = &RollbackReport{
+			Mode:       mode,
+			Skipped:    true,
+			SkipReason: "no pre-deploy snapshot available",
+			StartedAt:  time.Now(),
+			FinishedAt: time.Now(),
+		}
+		return
+	}
+	currentImages := map[string]string{}
+	if report.Post != nil && len(report.Post.Images) > 0 {
+		currentImages = report.Post.Images
+	}
+	plan, ok, reason := BuildRollbackPlan(report.Pre, currentImages)
+	if !ok {
+		report.Rollback = &RollbackReport{
+			Mode:       mode,
+			Skipped:    true,
+			SkipReason: reason,
+			StartedAt:  time.Now(),
+			FinishedAt: time.Now(),
+		}
+		return
+	}
+	plan.FromSnapshotFile = report.PreSnapshotFile
+
+	timeout := deps.RollbackTimeout
+	if timeout <= 0 {
+		if cfg != nil && cfg.Deploy.WaitTimeout > 0 {
+			timeout = 2 * cfg.Deploy.WaitTimeout
+		} else {
+			timeout = 3 * time.Minute
+		}
+	}
+	ctx, cancel := contextWithFreshTimeout(parent, timeout)
+	defer cancel()
+
+	rdeps := RollbackDeps{
+		Compose:     deps.Compose,
+		Logger:      deps.Logger,
+		UI:          deps.UI,
+		Progress:    deps.Progress,
+		SnapshotDir: deps.SnapshotDir,
+		WaitTimeout: timeout,
+	}
+	rep, rerr := ExecuteRollback(ctx, rdeps, plan, mode)
+	report.Rollback = rep
+	if rerr != nil {
+		// Surface, but never overwrite the original cause.
+		deps.Logger.Error("auto-rollback did not complete cleanly",
+			slog.String("err", rerr.Error()),
+			slog.String("triggered_by", string(step)),
+		)
+	}
 }

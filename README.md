@@ -94,6 +94,28 @@ Run the gated deployment: verify → compose up → record.
 c2quay deploy --env production
 c2quay deploy --env production --service api
 c2quay deploy --env production --dry-run
+c2quay deploy --env production --auto-rollback=off       # keep current images on failure
+c2quay deploy --env production --auto-rollback=dry-run   # preview the rollback plan
+```
+
+Auto-rollback is **on by default**. When `docker compose up` or the smoke
+check fails, c2quay writes a compose override pinning each service back to
+the image it had in the pre-deploy snapshot and re-runs `compose up --wait`.
+`record-deployment` is never called during auto-rollback, so the broker's
+view of the previous version stays correct. Rollback is intentionally **not**
+triggered when `record-deployment` itself fails — compose has already
+succeeded at that point, and which side to reconcile (re-post to the broker
+vs. roll compose back by hand) is an operator decision.
+
+### `c2quay rollback`
+
+Manually restore a previous snapshot's images. Useful when auto-rollback was
+disabled, when `record-deployment` failed, or when restoring from an older
+snapshot than the most recent one.
+
+```bash
+c2quay rollback --env production --from-snapshot .c2quay/snapshots/20260417T120000Z-pre.json
+c2quay rollback --env production --from-snapshot <file> --dry-run
 ```
 
 ### `c2quay status`
@@ -166,7 +188,12 @@ The split is deliberate: Compose owns *what the service is*, c2quay owns *how th
 - [x] `status` command
 - [x] Smoke check hook
 - [ ] `deploy` over SSH
-- [ ] Automatic rollback execution
+- [x] Automatic rollback execution (opt-out via `--auto-rollback=off`)
+
+> **Upgrading from v0.3:** auto-rollback is on by default. If your workflow
+> relied on the old "fix and retry" behaviour (compose left in the failed
+> state so an operator can inspect it before reverting), pass
+> `--auto-rollback=off` on the `c2quay deploy` call.
 
 ## Contributing
 

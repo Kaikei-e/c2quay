@@ -21,11 +21,11 @@ import (
 // --- fakes -------------------------------------------------------------
 
 type fakeDeployBroker struct {
-	canIDeployFunc      func(ctx context.Context, in broker.CanIDeployInput) (*broker.CanIDeployResult, error)
+	canIDeployFunc       func(ctx context.Context, in broker.CanIDeployInput) (*broker.CanIDeployResult, error)
 	recordDeploymentFunc func(ctx context.Context, in broker.RecordDeploymentInput) error
-	hasRelationFunc     func(rel string) bool
-	apiCalls            int
-	recordCalls         []broker.RecordDeploymentInput
+	hasRelationFunc      func(rel string) bool
+	apiCalls             int
+	recordCalls          []broker.RecordDeploymentInput
 }
 
 func (f *fakeDeployBroker) CanIDeploy(ctx context.Context, in broker.CanIDeployInput) (*broker.CanIDeployResult, error) {
@@ -49,10 +49,17 @@ func (f *fakeDeployBroker) HasRelation(rel string) bool {
 func (f *fakeDeployBroker) APICallCount() int { return f.apiCalls }
 
 type fakeCompose struct {
-	upErr   error
-	upCalls []composeadapter.UpOptions
-	ps      []composeadapter.ContainerStatus
-	psErr   error
+	upErr     error
+	upCalls   []composeadapter.UpOptions
+	ps        []composeadapter.ContainerStatus
+	psErr     error
+	renderCfg *composeadapter.RenderedConfig
+	renderErr error
+	// renderCfgs lets a test script successive RenderConfigJSON responses.
+	// If set, each call pops the next entry; calls past the end fall back to
+	// the last value or renderCfg.
+	renderCfgs []*composeadapter.RenderedConfig
+	renderIdx  int
 }
 
 func (f *fakeCompose) Up(_ context.Context, opts composeadapter.UpOptions, _ io.Writer) error {
@@ -61,6 +68,23 @@ func (f *fakeCompose) Up(_ context.Context, opts composeadapter.UpOptions, _ io.
 }
 func (f *fakeCompose) PsJSON(context.Context) ([]composeadapter.ContainerStatus, error) {
 	return f.ps, f.psErr
+}
+func (f *fakeCompose) RenderConfigJSON(context.Context) (*composeadapter.RenderedConfig, error) {
+	if f.renderErr != nil {
+		return nil, f.renderErr
+	}
+	if len(f.renderCfgs) > 0 {
+		idx := f.renderIdx
+		if idx >= len(f.renderCfgs) {
+			idx = len(f.renderCfgs) - 1
+		}
+		f.renderIdx++
+		return f.renderCfgs[idx], nil
+	}
+	if f.renderCfg != nil {
+		return f.renderCfg, nil
+	}
+	return &composeadapter.RenderedConfig{Services: map[string]composeadapter.RenderedService{}}, nil
 }
 
 type silentUI struct{ events []string }
@@ -172,6 +196,93 @@ func TestDeploy_DryRun_StopsBeforeCompose(t *testing.T) {
 	assert.Empty(t, report.FailedAtStep)
 	assert.Empty(t, cp.upCalls, "compose up MUST NOT run in dry-run")
 	assert.Empty(t, bk.recordCalls, "record-deployment MUST NOT run in dry-run")
+}
+
+// TestDeploy_AutoRollbackOnComposeUpFailure proves that when compose-up fails
+// and RollbackMode is on (the default), the rollback flow is invoked — the
+// fake compose records a second Up call with ExtraFiles pointing at the
+// generated override.
+func TestDeploy_AutoRollbackOnComposeUpFailure(t *testing.T) {
+	bk := &fakeDeployBroker{
+		canIDeployFunc: func(_ context.Context, _ broker.CanIDeployInput) (*broker.CanIDeployResult, error) {
+			return &broker.CanIDeployResult{Deployable: true}, nil
+		},
+	}
+	// Pre-snapshot sees v1 (what's currently deployed); post-failure capture
+	// and the rollback executor see v2 (user's new compose). The plan builder
+	// notices the mismatch and triggers a rollback.
+	cp := &fakeCompose{
+		upErr: errors.New("compose boom"),
+		renderCfgs: []*composeadapter.RenderedConfig{
+			{Services: map[string]composeadapter.RenderedService{"api": {Image: "api:v1"}}},
+			{Services: map[string]composeadapter.RenderedService{"api": {Image: "api:v2"}}},
+		},
+	}
+	deps := baseDeps(bk, cp)
+	deps.SnapshotDir = t.TempDir()
+	deps.RollbackMode = release.RollbackOn
+
+	report, err := release.Deploy(context.Background(), baseConfig(), "production", "", false, deps)
+	require.Error(t, err)
+	require.NotNil(t, report)
+	assert.Equal(t, release.StepComposeUp, report.FailedAtStep)
+	assert.NotNil(t, report.Pre)
+	assert.Equal(t, "api:v1", report.Pre.Images["api"])
+	require.NotNil(t, report.Rollback, "auto-rollback report should be populated")
+	assert.True(t, report.Rollback.Attempted)
+
+	// Two Up calls total: the failing deploy Up + the rollback Up (which
+	// also fails because the fake always returns upErr; that's fine — we
+	// just want to assert rollback was attempted with the override).
+	require.GreaterOrEqual(t, len(cp.upCalls), 2, "rollback should have attempted a compose up")
+	rbCall := cp.upCalls[len(cp.upCalls)-1]
+	require.Len(t, rbCall.ExtraFiles, 1, "rollback Up must pass an override file")
+	assert.Contains(t, rbCall.ExtraFiles[0], "override.yml")
+}
+
+// TestDeploy_AutoRollbackOffPreservesOldBehaviour verifies that with
+// RollbackMode=off, no second Up call fires and the report has no Rollback.
+func TestDeploy_AutoRollbackOffPreservesOldBehaviour(t *testing.T) {
+	bk := &fakeDeployBroker{
+		canIDeployFunc: func(_ context.Context, _ broker.CanIDeployInput) (*broker.CanIDeployResult, error) {
+			return &broker.CanIDeployResult{Deployable: true}, nil
+		},
+	}
+	cp := &fakeCompose{upErr: errors.New("compose boom")}
+	deps := baseDeps(bk, cp)
+	deps.SnapshotDir = t.TempDir()
+	deps.RollbackMode = release.RollbackOff
+
+	report, err := release.Deploy(context.Background(), baseConfig(), "production", "", false, deps)
+	require.Error(t, err)
+	require.NotNil(t, report)
+	assert.Equal(t, release.StepComposeUp, report.FailedAtStep)
+	assert.Nil(t, report.Rollback, "no rollback attempted when mode=off")
+	assert.Len(t, cp.upCalls, 1, "only the initial deploy Up should run when rollback is off")
+}
+
+// TestDeploy_RecordFailureNoAutoRollback confirms that a record-deployment
+// failure never triggers auto-rollback (PolicyFor(StepRecord)==false).
+func TestDeploy_RecordFailureNoAutoRollback(t *testing.T) {
+	bk := &fakeDeployBroker{
+		canIDeployFunc: func(_ context.Context, _ broker.CanIDeployInput) (*broker.CanIDeployResult, error) {
+			return &broker.CanIDeployResult{Deployable: true}, nil
+		},
+		recordDeploymentFunc: func(_ context.Context, _ broker.RecordDeploymentInput) error {
+			return errors.New("broker 503")
+		},
+	}
+	cp := &fakeCompose{ps: []composeadapter.ContainerStatus{{Service: "api", State: "running", Health: "healthy"}}}
+	deps := baseDeps(bk, cp)
+	deps.SnapshotDir = t.TempDir()
+	deps.RollbackMode = release.RollbackOn // even with on, StepRecord skips
+
+	report, err := release.Deploy(context.Background(), baseConfig(), "production", "", false, deps)
+	require.Error(t, err)
+	require.NotNil(t, report)
+	assert.Equal(t, release.StepRecord, report.FailedAtStep)
+	assert.Nil(t, report.Rollback, "record-deployment failure must NOT auto-rollback")
+	assert.Len(t, cp.upCalls, 1, "only the initial deploy Up should run")
 }
 
 func TestDeploy_MissingDeps_Errors(t *testing.T) {

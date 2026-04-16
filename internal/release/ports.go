@@ -24,9 +24,14 @@ type DeployBroker interface {
 }
 
 // ComposeDeployer is the subset of the Compose adapter used during deploy.
+//
+// RenderConfigJSON is required so pre-deploy snapshots can capture the
+// resolved {service → image} map, which the rollback flow uses to pin
+// services back to their previous images.
 type ComposeDeployer interface {
 	Up(ctx context.Context, opts composeadapter.UpOptions, progress io.Writer) error
 	PsJSON(ctx context.Context) ([]composeadapter.ContainerStatus, error)
+	RenderConfigJSON(ctx context.Context) (*composeadapter.RenderedConfig, error)
 }
 
 // UI is the progressive output surface used by orchestrators. output.Writer

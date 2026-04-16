@@ -18,8 +18,9 @@ import (
 
 func newDeployCommand(rt *runtimeCtx) *cobra.Command {
 	var (
-		service string
-		dryRun  bool
+		service          string
+		dryRun           bool
+		autoRollbackFlag string
 	)
 	cmd := &cobra.Command{
 		Use:   "deploy",
@@ -28,15 +29,21 @@ func newDeployCommand(rt *runtimeCtx) *cobra.Command {
 			if rt.flags.envName == "" {
 				return &ExitError{Code: ExitOperatorError, Err: errors.New("--env is required")}
 			}
-			return runDeploy(cmd.Context(), rt, service, dryRun)
+			mode, err := release.ParseRollbackMode(autoRollbackFlag)
+			if err != nil {
+				return &ExitError{Code: ExitOperatorError, Err: err}
+			}
+			return runDeploy(cmd.Context(), rt, service, dryRun, mode)
 		},
 	}
 	cmd.Flags().StringVar(&service, "service", "", "limit to a single service")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "run lock+snapshot+gate only, do not invoke docker compose up")
+	cmd.Flags().StringVar(&autoRollbackFlag, "auto-rollback", "on",
+		"on failure, restore pre-deploy images. values: on (default) | off | dry-run")
 	return cmd
 }
 
-func runDeploy(ctx context.Context, rt *runtimeCtx, onlyService string, dryRun bool) error {
+func runDeploy(ctx context.Context, rt *runtimeCtx, onlyService string, dryRun bool, rollbackMode release.RollbackMode) error {
 	tw := output.NewText(rt.stdout)
 	log := rt.logger
 
@@ -80,14 +87,15 @@ func runDeploy(ctx context.Context, rt *runtimeCtx, onlyService string, dryRun b
 	log.Info("step completed", slog.String("step", "broker-start"), slog.String("url", rt.cfg.Broker.BaseURL))
 
 	report, derr := release.Deploy(ctx, rt.cfg, rt.flags.envName, onlyService, dryRun, release.DeployDeps{
-		Broker:      bc,
-		Compose:     adapter,
-		Strategy:    strat,
-		Logger:      log,
-		UI:          tw,
-		Progress:    rt.stderr,
-		Stderr:      rt.stderr,
-		SnapshotDir: release.DefaultSnapshotDir(),
+		Broker:       bc,
+		Compose:      adapter,
+		Strategy:     strat,
+		Logger:       log,
+		UI:           tw,
+		Progress:     rt.stderr,
+		Stderr:       rt.stderr,
+		SnapshotDir:  release.DefaultSnapshotDir(),
+		RollbackMode: rollbackMode,
 	})
 	if derr != nil {
 		if report != nil && report.FailedAtStep != "" {
@@ -98,6 +106,7 @@ func runDeploy(ctx context.Context, rt *runtimeCtx, onlyService string, dryRun b
 				PreSnapshot:     report.Pre,
 				PreSnapshotFile: report.PreSnapshotFile,
 				PostSnapshot:    report.Post,
+				Rollback:        report.Rollback,
 			}.Write(rt.stderr)
 		}
 		return classifyDeployError(derr, report)

@@ -68,8 +68,18 @@ func NewShell(opts ShellOptions) *ShellAdapter {
 
 // baseArgs builds the prefix `-f <file> -p <project>` used by every compose call.
 func (a *ShellAdapter) baseArgs() []string {
-	args := []string{"compose"}
+	return a.baseArgsWithExtra(nil)
+}
+
+// baseArgsWithExtra builds the prefix with additional compose files appended
+// after the configured base files (same order as the CLI accepts for layering).
+func (a *ShellAdapter) baseArgsWithExtra(extra []string) []string {
+	args := make([]string, 0, 1+2*(len(a.files)+len(extra))+2)
+	args = append(args, "compose")
 	for _, f := range a.files {
+		args = append(args, "-f", f)
+	}
+	for _, f := range extra {
 		args = append(args, "-f", f)
 	}
 	if a.project != "" {
@@ -141,7 +151,8 @@ func (a *ShellAdapter) PsJSON(ctx context.Context) ([]ContainerStatus, error) {
 // for a known bug (docker/compose#10596) where `--wait` returns exit 1 even
 // when every service is healthy, by cross-checking `ps` after the call.
 func (a *ShellAdapter) Up(ctx context.Context, opts UpOptions, progress io.Writer) error {
-	args := append(a.baseArgs(), "up", "-d")
+	args := a.baseArgsWithExtra(opts.ExtraFiles)
+	args = append(args, "up", "-d")
 	if opts.RemoveOrphans {
 		args = append(args, "--remove-orphans")
 	}

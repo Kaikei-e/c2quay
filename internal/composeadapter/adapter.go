@@ -45,8 +45,8 @@ type VersionInfo struct {
 // RenderedConfig is a trimmed projection of `docker compose config --format json`.
 // We only pull the fields c2quay needs.
 type RenderedConfig struct {
-	Name     string                       `json:"name"`
-	Services map[string]RenderedService   `json:"services"`
+	Name     string                     `json:"name"`
+	Services map[string]RenderedService `json:"services"`
 }
 
 // RenderedService is the sliver of a Compose service definition c2quay uses.
@@ -70,6 +70,10 @@ type UpOptions struct {
 	RemoveOrphans bool
 	Wait          bool
 	Timeout       time.Duration
+	// ExtraFiles are appended after the adapter's base compose files for this
+	// single call. Used by the rollback flow to inject a pinned-image override
+	// without rebuilding the adapter.
+	ExtraFiles []string
 }
 
 // ErrHyphenatedCompose indicates the caller invoked `docker-compose` (v1),

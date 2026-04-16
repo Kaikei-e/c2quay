@@ -39,10 +39,15 @@ Every arrow points downward; lower layers do not import upward.
 
 ```
 (a) file lock        ─ fail-closed if another process holds it
-(b) pre snapshot     ─ ps + configured releases
+(b) pre snapshot     ─ ps + configured releases + resolved {service → image}
 (c) gate check       ─ reuses verify pipeline
 (d) compose up       ─ --remove-orphans --wait, with ps cross-check
 (e) smoke (optional) ─ shell command with TARGET_ENV injection
+(d')/(e') auto-rollback on (d)/(e) failure when --auto-rollback=on (default):
+                       write pinned-image override, re-run `compose up --wait`,
+                       capture post-rollback snapshot. Never re-invokes
+                       `record-deployment`. Policy deliberately skips rollback
+                       after (f) — see ADR 0006.
 (f) record-deployment─ MUST be last; never earlier
 (g) post snapshot
 (h) lock release
@@ -93,6 +98,12 @@ c2quay refuses mutable release identifiers. See
 - Atomic deploys (see [plan §2.4](../c2quay_final_plan.md)). The goal is
   restart-safe and auditable, not transactional.
 - Partial rollouts (`all_or_nothing: false` is reserved for future use).
-- Automatic rollback execution. Failure paths produce a rollback hint; the
-  operator acts on it.
+- Broker-side rollback. Auto-rollback restores the Compose plane only;
+  `record-deployment` is never called during rollback (which is correct: the
+  broker still records the previous version, and that is what's running
+  again). See [ADR 0006](adr/0006-auto-rollback.md) for the rationale.
+- Auto-rollback after `record-deployment` failure. By the time that step can
+  fail, compose is already healthy on the new version. Whether to re-post to
+  the broker or roll compose back by hand is an operator decision, not an
+  automatic one.
 - SSH remote deploys. Future extension; not in v0.

@@ -90,6 +90,7 @@ func newRootCommand() (*cobra.Command, *runtimeCtx) {
 		newDoctorCommand(rt),
 		newVerifyCommand(rt),
 		newDeployCommand(rt),
+		newRollbackCommand(rt),
 		newStatusCommand(rt),
 	)
 
@@ -126,6 +127,6 @@ type ExitError struct {
 	Err  error
 }
 
-func (e *ExitError) Error() string  { return e.Err.Error() }
-func (e *ExitError) Unwrap() error  { return e.Err }
-func (e *ExitError) ExitCode() int  { return e.Code }
+func (e *ExitError) Error() string { return e.Err.Error() }
+func (e *ExitError) Unwrap() error { return e.Err }
+func (e *ExitError) ExitCode() int { return e.Code }
