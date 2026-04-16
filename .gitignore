@@ -1,0 +1,10 @@
+/bin/
+/.c2quay/
+/coverage.out
+/dist/
+*.test
+.idea/
+.vscode/
+
+
+.claude/

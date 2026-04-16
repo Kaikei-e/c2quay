@@ -1,0 +1,31 @@
+version: "2"
+
+run:
+  timeout: 5m
+
+linters:
+  default: none
+  enable:
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    - gosec
+    - revive
+    - gocritic
+    - misspell
+    - bodyclose
+  settings:
+    revive:
+      rules:
+        - name: var-naming
+        - name: exported
+          disabled: true
+    gosec:
+      excludes:
+        - G204   # subprocess launched with variable is intentional (we run docker/git)
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
