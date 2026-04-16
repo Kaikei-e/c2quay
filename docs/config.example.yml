@@ -1,0 +1,34 @@
+compose:
+  files:
+    - compose.yaml
+  project_name: myapp
+
+broker:
+  base_url: https://pact-broker.example.com
+  # Authentication MUST NOT be written here.
+  # Use environment variables instead:
+  #   PACT_BROKER_USERNAME / PACT_BROKER_PASSWORD  (Basic auth)
+  #   PACT_BROKER_TOKEN                            (Bearer token)
+
+versioning:
+  strategy: manifest_file          # or: resolved_image_digest | git_sha
+  options:
+    path: .c2quay/versions.json
+
+deploy:
+  wait: true
+  wait_timeout: 180s
+  smoke:
+    command: ./scripts/smoke.sh
+    timeout: 30s
+    env:
+      TARGET_ENV: production
+
+environments:
+  production:
+    all_or_nothing: true
+    services:
+      api:
+        pacticipant: api
+      web:
+        pacticipant: web
