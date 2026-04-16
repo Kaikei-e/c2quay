@@ -67,16 +67,20 @@ release:
   draft: false
   prerelease: auto
 
-brews:
-  - name: c2quay
-    repository:
-      owner: Kaikei-e
-      name: homebrew-tap
-      branch: main
-    homepage: https://github.com/Kaikei-e/c2quay
-    description: Contract-gated releases for Docker Compose.
-    license: Apache-2.0
-    install: |
-      bin.install "c2quay"
-    test: |
-      system "#{bin}/c2quay version"
+# Homebrew tap is commented out until the user creates
+# github.com/Kaikei-e/homebrew-tap and adds HOMEBREW_TAP_GITHUB_TOKEN.
+# Uncomment the block below to enable automatic formula publishing.
+#
+# brews:
+#   - name: c2quay
+#     repository:
+#       owner: Kaikei-e
+#       name: homebrew-tap
+#       branch: main
+#     homepage: https://github.com/Kaikei-e/c2quay
+#     description: Contract-gated releases for Docker Compose.
+#     license: Apache-2.0
+#     install: |
+#       bin.install "c2quay"
+#     test: |
+#       system "#{bin}/c2quay version"

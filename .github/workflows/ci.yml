@@ -37,3 +37,28 @@ jobs:
         with:
           version: latest
           args: --timeout=5m
+
+  release-validate:
+    # Proves the GoReleaser config still builds end-to-end, without tagging
+    # or publishing anything. If this is green we know `release.yml` will
+    # succeed on the next `v*` tag.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.26.x"
+          cache: true
+      - uses: anchore/sbom-action/download-syft@v0
+      - uses: goreleaser/goreleaser-action@v7
+        with:
+          distribution: goreleaser
+          version: latest
+          args: check
+      - uses: goreleaser/goreleaser-action@v7
+        with:
+          distribution: goreleaser
+          version: latest
+          args: release --snapshot --clean --skip=publish
