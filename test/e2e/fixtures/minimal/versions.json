@@ -1,0 +1,6 @@
+{
+  "services": {
+    "api": {"version": "2026-04-17-api-ok", "image": "ghcr.io/example/api@sha256:abc"},
+    "web": {"version": "2026-04-17-web-ok", "image": "ghcr.io/example/web@sha256:def"}
+  }
+}

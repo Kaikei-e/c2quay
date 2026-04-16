@@ -1,0 +1,5 @@
+services:
+  api:
+    image: ghcr.io/example/api:v1
+  web:
+    image: ghcr.io/example/web:v1
