@@ -53,8 +53,11 @@ func runVerify(ctx context.Context, rt *runtimeCtx, onlyService string) error {
 	if err := bc.Start(ctx); err != nil {
 		return &ExitError{Code: ExitOperatorError, Err: fmt.Errorf("contact broker: %w", err)}
 	}
-	if !bc.HasRelation("pb:can-i-deploy") {
-		return &ExitError{Code: ExitOperatorError, Err: errors.New("broker lacks pb:can-i-deploy relation")}
+	if !bc.HasRelation(broker.RelCanIDeployToEnvironment) && !bc.HasRelation(broker.RelCanIDeployGeneric) {
+		return &ExitError{Code: ExitOperatorError, Err: fmt.Errorf(
+			"broker lacks can-i-deploy relation (tried %q and %q)",
+			broker.RelCanIDeployToEnvironment, broker.RelCanIDeployGeneric,
+		)}
 	}
 
 	report, err := release.Verify(ctx, rt.cfg, rt.flags.envName, onlyService, release.VerifyDeps{
