@@ -1,0 +1,82 @@
+version: 2
+
+project_name: c2quay
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: c2quay
+    main: ./cmd/c2quay
+    binary: c2quay
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X github.com/Kaikei-e/c2quay/internal/cli.Version={{.Version}}
+
+archives:
+  - id: c2quay
+    formats:
+      - tar.gz
+    name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}"
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
+
+checksum:
+  name_template: "checksums.txt"
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-next"
+
+sboms:
+  - artifacts: archive
+
+changelog:
+  use: github
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+  groups:
+    - title: Features
+      regexp: '^.*?feat(\(.+\))??:.+$'
+      order: 0
+    - title: Bug fixes
+      regexp: '^.*?fix(\(.+\))??:.+$'
+      order: 1
+    - title: Other
+      order: 999
+
+release:
+  github:
+    owner: Kaikei-e
+    name: c2quay
+  draft: false
+  prerelease: auto
+
+brews:
+  - name: c2quay
+    repository:
+      owner: Kaikei-e
+      name: homebrew-tap
+      branch: main
+    homepage: https://github.com/Kaikei-e/c2quay
+    description: Contract-gated releases for Docker Compose.
+    license: Apache-2.0
+    install: |
+      bin.install "c2quay"
+    test: |
+      system "#{bin}/c2quay version"
