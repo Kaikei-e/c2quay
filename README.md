@@ -1,5 +1,7 @@
 # c2quay
 
+[![ci](https://github.com/Kaikei-e/c2quay/actions/workflows/ci.yml/badge.svg)](https://github.com/Kaikei-e/c2quay/actions/workflows/ci.yml)
+
 **Contract-gated releases for Docker Compose.**
 
 > ⚠️ **Status: v0.3.0 — alpha.** The CLI surface (`doctor`, `verify`, `deploy`, `status`) is functional and test-covered. Feedback and bug reports welcome via Issues.
