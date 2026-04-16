@@ -39,7 +39,11 @@ func Factory(cfg *config.Config, adapter configRenderer) (Strategy, error) {
 	case config.StrategyResolvedDigest:
 		return NewResolvedDigest(adapter), nil
 	case config.StrategyGitSHA:
-		return NewGitSHA(), nil
+		short, _, err := ParseShortOption(cfg.Versioning.Options["short"])
+		if err != nil {
+			return nil, err
+		}
+		return NewGitSHAWith(GitSHAOptions{Short: short}), nil
 	default:
 		return nil, fmt.Errorf("versioning.strategy: %q is not supported", cfg.Versioning.Strategy)
 	}
