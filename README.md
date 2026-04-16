@@ -144,6 +144,9 @@ versioning:
   strategy: manifest_file   # or: resolved_image_digest | git_sha
   options:
     path: .c2quay/versions.json
+    # For the git_sha strategy only:
+    #   short: true    # `git rev-parse --short HEAD` (core.abbrev length)
+    #   short: "12"    # `git rev-parse --short=12 HEAD`
 
 deploy:
   wait: true
