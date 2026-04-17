@@ -15,9 +15,18 @@ type GateChecker interface {
 	CanIDeploy(ctx context.Context, in broker.CanIDeployInput) (*broker.CanIDeployResult, error)
 }
 
+// AggregateGateChecker extends GateChecker with the multi-selector matrix
+// query used for all_or_nothing environments. Pipelines may type-assert on
+// this to decide whether to fan out or batch into one request. Declared as
+// a separate interface so legacy test fakes keep compiling.
+type AggregateGateChecker interface {
+	GateChecker
+	CanIDeployMany(ctx context.Context, env string, selectors []broker.CanIDeploySelector) (*broker.CanIDeploySetResult, error)
+}
+
 // DeployBroker extends GateChecker with what the deploy pipeline needs.
 type DeployBroker interface {
-	GateChecker
+	AggregateGateChecker
 	RecordDeployment(ctx context.Context, in broker.RecordDeploymentInput) error
 	HasRelation(rel string) bool
 	APICallCount() int

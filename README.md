@@ -167,6 +167,19 @@ environments:
         pacticipant: worker
 ```
 
+**`all_or_nothing`.** When `true` (recommended for monolithic rollouts
+where every service ships at the same version), `verify` and `deploy`
+send the whole candidate set to the broker's matrix endpoint in a single
+`can-i-deploy` request. The broker evaluates the services together, so a
+release that updates N consumers and their provider simultaneously is not
+gated on the (nonexistent) pact between the new consumer and the *current
+prod* provider. Requires a broker exposing the generic `pb:can-i-deploy`
+relation — both stock Pact Broker and PactFlow do. When `false` (default),
+c2quay falls back to per-service `can-i-deploy` calls, which is the right
+shape for independently-versioned services. See
+[ADR 0009](docs/adr/0009-aggregate-can-i-deploy-for-all-or-nothing.md)
+for the background incident.
+
 A worked example lives in [`docs/config.example.yml`](docs/config.example.yml).
 
 The split is deliberate: Compose owns *what the service is*, c2quay owns *how the release happens*. c2quay never touches the service definition.

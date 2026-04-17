@@ -22,6 +22,7 @@ import (
 
 type fakeDeployBroker struct {
 	canIDeployFunc       func(ctx context.Context, in broker.CanIDeployInput) (*broker.CanIDeployResult, error)
+	canIDeployManyFunc   func(ctx context.Context, env string, selectors []broker.CanIDeploySelector) (*broker.CanIDeploySetResult, error)
 	recordDeploymentFunc func(ctx context.Context, in broker.RecordDeploymentInput) error
 	hasRelationFunc      func(rel string) bool
 	apiCalls             int
@@ -31,6 +32,13 @@ type fakeDeployBroker struct {
 func (f *fakeDeployBroker) CanIDeploy(ctx context.Context, in broker.CanIDeployInput) (*broker.CanIDeployResult, error) {
 	f.apiCalls++
 	return f.canIDeployFunc(ctx, in)
+}
+func (f *fakeDeployBroker) CanIDeployMany(ctx context.Context, env string, selectors []broker.CanIDeploySelector) (*broker.CanIDeploySetResult, error) {
+	f.apiCalls++
+	if f.canIDeployManyFunc != nil {
+		return f.canIDeployManyFunc(ctx, env, selectors)
+	}
+	return nil, errors.New("fakeDeployBroker: CanIDeployMany not configured")
 }
 func (f *fakeDeployBroker) RecordDeployment(ctx context.Context, in broker.RecordDeploymentInput) error {
 	f.apiCalls++

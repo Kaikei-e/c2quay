@@ -57,6 +57,12 @@ type Plan struct {
 	Services []string                         // order matters (output stability)
 	Releases map[string]versioning.Release    // service -> release
 	Mapping  map[string]config.ServiceMapping // service -> pacticipant mapping
+
+	// AllOrNothing mirrors the environment's all_or_nothing setting. When
+	// true, GateAll routes the check through a single matrix query so the
+	// broker evaluates the candidate set together. False keeps the
+	// per-service fan-out.
+	AllOrNothing bool
 }
 
 // BuildPlan resolves versions and service-to-pacticipant mapping from config.
@@ -87,9 +93,10 @@ func BuildPlan(ctx context.Context, cfg *config.Config, envName, onlyService str
 		return nil, err
 	}
 	return &Plan{
-		Env:      envName,
-		Services: services,
-		Releases: releases,
-		Mapping:  mapping,
+		Env:          envName,
+		Services:     services,
+		Releases:     releases,
+		Mapping:      mapping,
+		AllOrNothing: env.AllOrNothing,
 	}, nil
 }

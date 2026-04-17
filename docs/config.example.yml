@@ -26,6 +26,13 @@ deploy:
 
 environments:
   production:
+    # all_or_nothing: true sends every (pacticipant, version) in the plan
+    # to the broker's matrix endpoint as a single aggregate query, so the
+    # broker evaluates the candidate set as a monolithic rollout. Use this
+    # when you ship all services together at the same version. Requires
+    # the broker to expose the generic pb:can-i-deploy relation.
+    # all_or_nothing: false (default) fans out per-service can-i-deploy
+    # calls instead — correct for truly-independent deploys.
     all_or_nothing: true
     services:
       api:
