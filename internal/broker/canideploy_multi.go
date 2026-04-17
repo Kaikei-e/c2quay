@@ -81,13 +81,12 @@ func (c *Client) CanIDeployMany(ctx context.Context, env string, selectors []Can
 		return nil, err
 	}
 
-	q := url.Values{}
-	for _, s := range selectors {
-		q.Add("q[][pacticipant]", s.Pacticipant)
-		q.Add("q[][version]", s.Version)
-	}
-	q.Set("latestby", "cvp")
-	q.Set("environment", env)
+	// Pact Broker parses q[] as an ordered array where pacticipant and
+	// version are paired by position in the URL. url.Values.Encode()
+	// sorts keys alphabetically, which collapses the pairs into
+	// "all pacticipants, then all versions" and the broker returns 400.
+	// Build the string by hand to keep (pacticipant, version) adjacent.
+	rawQuery := buildMatrixQuery(env, selectors)
 
 	var doc struct {
 		Summary struct {
@@ -121,14 +120,15 @@ func (c *Client) CanIDeployMany(ctx context.Context, env string, selectors []Can
 			} `json:"pact"`
 		} `json:"matrix"`
 	}
-	if err := c.getJSON(ctx, base, q, &doc); err != nil {
+	fullURL := base + "?" + rawQuery
+	if err := c.getJSON(ctx, fullURL, nil, &doc); err != nil {
 		return nil, fmt.Errorf("can-i-deploy many -> %s: %w", env, err)
 	}
 
 	res := &CanIDeploySetResult{
 		Reason:    doc.Summary.Reason,
 		Unknown:   doc.Summary.Unknown,
-		BrokerURL: base + "?" + q.Encode(),
+		BrokerURL: fullURL,
 	}
 	if doc.Summary.Deployable != nil && *doc.Summary.Deployable {
 		res.Deployable = true
@@ -215,6 +215,33 @@ func summariseBadRow(pacticipant string, r CanIDeployMatrixRow) string {
 		return fmt.Sprintf("no verification result as %s against %s", role, counterpart)
 	}
 	return fmt.Sprintf("failed verification as %s against %s", role, counterpart)
+}
+
+// buildMatrixQuery produces the interleaved q[] query string the broker
+// needs. Pact Broker's Rack layer collects pacticipant/version pairs by
+// the order they appear in the URL, not by key, so
+//
+//	?q[][pacticipant]=A&q[][version]=V1&q[][pacticipant]=B&q[][version]=V2
+//
+// is the required shape. Building it via url.Values.Encode() groups all
+// pacticipant keys first and all version keys second (alphabetical) and
+// the broker responds with HTTP 400. latestby and environment come
+// after the selectors so the first q[] entry is always a pacticipant,
+// which matches the format pact-broker-client itself emits.
+func buildMatrixQuery(env string, selectors []CanIDeploySelector) string {
+	var b strings.Builder
+	for i, s := range selectors {
+		if i > 0 {
+			b.WriteByte('&')
+		}
+		b.WriteString("q%5B%5D%5Bpacticipant%5D=")
+		b.WriteString(url.QueryEscape(s.Pacticipant))
+		b.WriteString("&q%5B%5D%5Bversion%5D=")
+		b.WriteString(url.QueryEscape(s.Version))
+	}
+	b.WriteString("&latestby=cvp&environment=")
+	b.WriteString(url.QueryEscape(env))
+	return b.String()
 }
 
 // stripQueryTemplate removes an RFC 6570 level-3 query form like

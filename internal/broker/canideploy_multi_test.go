@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -36,19 +37,32 @@ func pactRow(consumer, cver, provider, pver string, verified *bool, verifyURL st
 	return row
 }
 
-func TestCanIDeployMany_BuildsBracketArrayQuery(t *testing.T) {
+func TestCanIDeployMany_BuildsInterleavedBracketArrayQuery(t *testing.T) {
 	tb := newTestBroker(t)
 	tb.index(map[string]broker.Link{
 		"pb:can-i-deploy": {Href: tb.URL() + "/matrix", Templated: false},
 	})
 	tb.on("GET /matrix", func(w http.ResponseWriter, r *http.Request) {
+		// Values decode correctly on the server side regardless of
+		// interleave, so cover both: (1) the parsed form is right,
+		// (2) the raw query preserves pair-wise order. Pact Broker
+		// returns 400 if pacticipant and version are not interleaved
+		// because the Rack q[] parser pairs them by URL position.
 		q := r.URL.Query()
-		// Order must match the selector order so consumer/version pairing
-		// by index is preserved through Rack-style bracket arrays.
 		assert.Equal(t, []string{"api", "web"}, q["q[][pacticipant]"])
 		assert.Equal(t, []string{"v1", "v2"}, q["q[][version]"])
 		assert.Equal(t, "cvp", q.Get("latestby"))
 		assert.Equal(t, "production", q.Get("environment"))
+
+		raw := r.URL.RawQuery
+		// Positions must go: pacticipant=A < version=v1 < pacticipant=B < version=v2.
+		iAPact := strings.Index(raw, "pacticipant%5D=api")
+		iAVer := strings.Index(raw, "version%5D=v1")
+		iBPact := strings.Index(raw, "pacticipant%5D=web")
+		iBVer := strings.Index(raw, "version%5D=v2")
+		require.True(t, iAPact >= 0 && iAVer > iAPact && iBPact > iAVer && iBVer > iBPact,
+			"raw query must interleave pairs; got: %s", raw)
+
 		tr := true
 		_ = json.NewEncoder(w).Encode(matrixResponse(&tr, "ok"))
 	})
