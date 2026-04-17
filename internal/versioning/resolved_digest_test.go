@@ -27,6 +27,7 @@ func (s *stubAdapter) RenderConfigJSON(context.Context) (*composeadapter.Rendere
 func (s *stubAdapter) PsJSON(context.Context) ([]composeadapter.ContainerStatus, error) {
 	return nil, nil
 }
+func (s *stubAdapter) Pull(context.Context, []string, io.Writer) error               { return nil }
 func (s *stubAdapter) Up(context.Context, composeadapter.UpOptions, io.Writer) error { return nil }
 
 var _ composeadapter.Adapter = (*stubAdapter)(nil)

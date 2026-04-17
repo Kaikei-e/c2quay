@@ -134,6 +134,25 @@ func Deploy(ctx context.Context, cfg *config.Config, envName, onlyService string
 		return report, nil
 	}
 
+	// (2a) optional pull — see ADR 0010. Runs only when the operator has
+	// opted in via `deploy.pull: always`; `missing` is handled natively by
+	// Compose during up, so we skip it here.
+	if cfg.Deploy.Pull == "always" {
+		pullStart := time.Now()
+		if err := deps.Compose.Pull(ctx, plan.Services, deps.Progress); err != nil {
+			deps.UI.Fail("compose pull", err.Error())
+			return failReport(report, StepComposeUp, err)
+		}
+		deps.UI.Ok("compose pull", fmt.Sprintf("%d service(s)", len(plan.Services)))
+		log.Info("compose pull completed",
+			slog.GroupAttrs("compose",
+				slog.String("policy", cfg.Deploy.Pull),
+				slog.Int("services", len(plan.Services)),
+				slog.Duration("duration", time.Since(pullStart)),
+			),
+		)
+	}
+
 	// (3) compose up — known --wait bug is handled by the adapter.
 	composeStart := time.Now()
 	upErr := deps.Compose.Up(ctx, composeadapter.UpOptions{

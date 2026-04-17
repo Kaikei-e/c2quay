@@ -38,6 +38,7 @@ type DeployBroker interface {
 // resolved {service → image} map, which the rollback flow uses to pin
 // services back to their previous images.
 type ComposeDeployer interface {
+	Pull(ctx context.Context, services []string, progress io.Writer) error
 	Up(ctx context.Context, opts composeadapter.UpOptions, progress io.Writer) error
 	PsJSON(ctx context.Context) ([]composeadapter.ContainerStatus, error)
 	RenderConfigJSON(ctx context.Context) (*composeadapter.RenderedConfig, error)

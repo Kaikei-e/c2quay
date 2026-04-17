@@ -53,7 +53,11 @@ type VersioningConfig struct {
 type DeployConfig struct {
 	Wait        bool          `yaml:"wait"`
 	WaitTimeout time.Duration `yaml:"wait_timeout"`
-	Smoke       SmokeConfig   `yaml:"smoke"`
+	// Pull controls whether c2quay runs `docker compose pull` between the
+	// gate and `compose up`. Values: "never" (default), "always", "missing".
+	// See ADR 0010.
+	Pull  string      `yaml:"pull"`
+	Smoke SmokeConfig `yaml:"smoke"`
 }
 
 // SmokeConfig describes the optional post-deploy smoke script.
@@ -113,6 +117,9 @@ func Load(path string) (*Config, error) {
 func (c *Config) applyDefaults() {
 	if c.Deploy.WaitTimeout == 0 {
 		c.Deploy.WaitTimeout = 180 * time.Second
+	}
+	if c.Deploy.Pull == "" {
+		c.Deploy.Pull = PullNever
 	}
 	if c.Deploy.Smoke.Timeout == 0 && c.Deploy.Smoke.Command != "" {
 		c.Deploy.Smoke.Timeout = 30 * time.Second

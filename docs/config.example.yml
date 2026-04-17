@@ -18,6 +18,12 @@ versioning:
 deploy:
   wait: true
   wait_timeout: 180s
+  # pull controls whether c2quay runs `docker compose pull <services>`
+  # between the gate and `compose up`. See ADR 0010.
+  #   never   (default) — do nothing; images must already be fresh
+  #   always  — fetch the services in the plan before `up`
+  #   missing — no-op in c2quay; Compose's own default already handles it
+  pull: never
   smoke:
     command: ./scripts/smoke.sh
     timeout: 30s

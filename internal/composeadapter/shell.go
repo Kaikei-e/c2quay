@@ -147,6 +147,17 @@ func (a *ShellAdapter) PsJSON(ctx context.Context) ([]ContainerStatus, error) {
 	return ParsePsJSON(stdout)
 }
 
+// Pull runs `docker compose pull <services>`, streaming progress to the
+// supplied writer. See ADR 0010.
+func (a *ShellAdapter) Pull(ctx context.Context, services []string, progress io.Writer) error {
+	args := append(a.baseArgs(), "pull")
+	args = append(args, services...)
+	if err := a.exec.RunWithStream(ctx, progress, "docker", args...); err != nil {
+		return fmt.Errorf("docker compose pull failed: %w", err)
+	}
+	return nil
+}
+
 // Up runs `docker compose up -d [--wait] [--remove-orphans]`. It compensates
 // for a known bug (docker/compose#10596) where `--wait` returns exit 1 even
 // when every service is healthy, by cross-checking `ps` after the call.

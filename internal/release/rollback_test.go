@@ -169,6 +169,7 @@ type rbFakeCompose struct {
 	renderErr error
 }
 
+func (f *rbFakeCompose) Pull(context.Context, []string, io.Writer) error { return nil }
 func (f *rbFakeCompose) Up(_ context.Context, opts composeadapter.UpOptions, _ io.Writer) error {
 	f.upCalls = append(f.upCalls, opts)
 	return f.upErr

@@ -10,15 +10,28 @@ import (
 )
 
 const (
-	StrategyManifestFile    = "manifest_file"
-	StrategyResolvedDigest  = "resolved_image_digest"
-	StrategyGitSHA          = "git_sha"
+	StrategyManifestFile   = "manifest_file"
+	StrategyResolvedDigest = "resolved_image_digest"
+	StrategyGitSHA         = "git_sha"
+)
+
+// Pull policy values for DeployConfig.Pull. See ADR 0010.
+const (
+	PullNever   = "never"
+	PullAlways  = "always"
+	PullMissing = "missing"
 )
 
 var validStrategies = map[string]struct{}{
 	StrategyManifestFile:   {},
 	StrategyResolvedDigest: {},
 	StrategyGitSHA:         {},
+}
+
+var validPullPolicies = map[string]struct{}{
+	PullNever:   {},
+	PullAlways:  {},
+	PullMissing: {},
 }
 
 // rawProbe is used to detect fields that must not appear in YAML (credentials).
@@ -93,6 +106,10 @@ func (c *Config) Validate() error {
 
 	if c.Deploy.Smoke.Command != "" && c.Deploy.Smoke.Timeout <= 0 {
 		return errors.New("deploy.smoke.timeout: must be positive when smoke.command is set")
+	}
+
+	if _, ok := validPullPolicies[c.Deploy.Pull]; !ok {
+		return fmt.Errorf("deploy.pull: %q is not supported (use: never, always, or missing)", c.Deploy.Pull)
 	}
 
 	return nil

@@ -127,3 +127,47 @@ func TestShellAdapter_Up_RealFailureNotMasked(t *testing.T) {
 	err := a.Up(context.Background(), composeadapter.UpOptions{Wait: true}, io.Discard)
 	require.Error(t, err)
 }
+
+// TestShellAdapter_Pull proves ADR 0010: Pull shells out to
+// `docker compose pull <services>`.
+func TestShellAdapter_Pull(t *testing.T) {
+	fe := &fakeExec{}
+	a := composeadapter.NewShell(composeadapter.ShellOptions{
+		ComposeFiles: []string{"compose.yaml"},
+		ProjectName:  "app",
+		Exec:         fe,
+	})
+	err := a.Pull(context.Background(), []string{"api", "worker"}, io.Discard)
+	require.NoError(t, err)
+	require.Len(t, fe.streamed, 1)
+	assert.Equal(t,
+		[]string{"docker", "compose", "-f", "compose.yaml", "-p", "app", "pull", "api", "worker"},
+		fe.streamed[0])
+}
+
+func TestShellAdapter_Pull_EmptyServicesPullsAll(t *testing.T) {
+	fe := &fakeExec{}
+	a := composeadapter.NewShell(composeadapter.ShellOptions{
+		ComposeFiles: []string{"c.yml"},
+		ProjectName:  "proj",
+		Exec:         fe,
+	})
+	err := a.Pull(context.Background(), nil, io.Discard)
+	require.NoError(t, err)
+	require.Len(t, fe.streamed, 1)
+	assert.Equal(t,
+		[]string{"docker", "compose", "-f", "c.yml", "-p", "proj", "pull"},
+		fe.streamed[0])
+}
+
+func TestShellAdapter_Pull_WrapsErr(t *testing.T) {
+	fe := &fakeExec{streamedErr: errors.New("registry 403")}
+	a := composeadapter.NewShell(composeadapter.ShellOptions{
+		ComposeFiles: []string{"c.yml"},
+		ProjectName:  "proj",
+		Exec:         fe,
+	})
+	err := a.Pull(context.Background(), []string{"api"}, io.Discard)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "docker compose pull failed")
+}

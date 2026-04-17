@@ -27,6 +27,11 @@ type Adapter interface {
 	// PsJSON returns the current container states for the project.
 	PsJSON(ctx context.Context) ([]ContainerStatus, error)
 
+	// Pull runs `docker compose pull <services>`, streaming progress to the
+	// supplied writer. Empty services means "every service in the project".
+	// See ADR 0010.
+	Pull(ctx context.Context, services []string, progress io.Writer) error
+
 	// Up runs `docker compose up -d` with the configured options, streaming
 	// progress output to progress.
 	Up(ctx context.Context, opts UpOptions, progress io.Writer) error

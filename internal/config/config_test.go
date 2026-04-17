@@ -74,6 +74,36 @@ func TestValidate_RequiresComposeFiles(t *testing.T) {
 	require.Error(t, err)
 }
 
+// TestLoad_PullPolicyDefaultsToNever proves ADR 0010: unset `deploy.pull`
+// must default to "never" so existing configs keep their prior behaviour.
+func TestLoad_PullPolicyDefaultsToNever(t *testing.T) {
+	cfg, err := config.Load("testdata/valid.yml")
+	require.NoError(t, err)
+	assert.Equal(t, config.PullNever, cfg.Deploy.Pull)
+}
+
+func TestLoad_PullPolicyAcceptsAllowedValues(t *testing.T) {
+	for _, v := range []string{config.PullAlways, config.PullMissing, config.PullNever} {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "c.yml")
+		body := strings.Replace(readFile(t, "testdata/valid.yml"), "  wait: true", "  wait: true\n  pull: "+v, 1)
+		require.NoError(t, os.WriteFile(path, []byte(body), 0o600))
+		cfg, err := config.Load(path)
+		require.NoError(t, err, "value=%s", v)
+		assert.Equal(t, v, cfg.Deploy.Pull, "value=%s", v)
+	}
+}
+
+func TestLoad_PullPolicyRejectsUnknownValue(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "c.yml")
+	body := strings.Replace(readFile(t, "testdata/valid.yml"), "  wait: true", "  wait: true\n  pull: sometimes", 1)
+	require.NoError(t, os.WriteFile(path, []byte(body), 0o600))
+	_, err := config.Load(path)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "deploy.pull")
+}
+
 func readFile(t *testing.T, p string) string {
 	t.Helper()
 	b, err := os.ReadFile(p)

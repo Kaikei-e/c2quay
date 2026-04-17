@@ -41,6 +41,9 @@ Every arrow points downward; lower layers do not import upward.
 (a) file lock        ─ fail-closed if another process holds it
 (b) pre snapshot     ─ ps + configured releases + resolved {service → image}
 (c) gate check       ─ reuses verify pipeline
+(c') pull (optional) ─ if deploy.pull == always, `docker compose pull <svcs>`
+                       runs after the gate and before (d). Failure aborts the
+                       deploy before anything mutates. See ADR 0010.
 (d) compose up       ─ --remove-orphans --wait, with ps cross-check
 (e) smoke (optional) ─ shell command with TARGET_ENV injection
 (d')/(e') auto-rollback on (d)/(e) failure when --auto-rollback=on (default):

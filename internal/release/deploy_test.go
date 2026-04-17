@@ -59,6 +59,8 @@ func (f *fakeDeployBroker) APICallCount() int { return f.apiCalls }
 type fakeCompose struct {
 	upErr     error
 	upCalls   []composeadapter.UpOptions
+	pullCalls [][]string
+	pullErr   error
 	ps        []composeadapter.ContainerStatus
 	psErr     error
 	renderCfg *composeadapter.RenderedConfig
@@ -68,6 +70,12 @@ type fakeCompose struct {
 	// the last value or renderCfg.
 	renderCfgs []*composeadapter.RenderedConfig
 	renderIdx  int
+}
+
+func (f *fakeCompose) Pull(_ context.Context, services []string, _ io.Writer) error {
+	svcCopy := append([]string(nil), services...)
+	f.pullCalls = append(f.pullCalls, svcCopy)
+	return f.pullErr
 }
 
 func (f *fakeCompose) Up(_ context.Context, opts composeadapter.UpOptions, _ io.Writer) error {
@@ -291,6 +299,74 @@ func TestDeploy_RecordFailureNoAutoRollback(t *testing.T) {
 	assert.Equal(t, release.StepRecord, report.FailedAtStep)
 	assert.Nil(t, report.Rollback, "record-deployment failure must NOT auto-rollback")
 	assert.Len(t, cp.upCalls, 1, "only the initial deploy Up should run")
+}
+
+// TestDeploy_PullAlwaysFiresBetweenGateAndUp proves ADR 0010: when
+// cfg.Deploy.Pull == "always", Pull runs after the gate and before compose up.
+func TestDeploy_PullAlwaysFiresBetweenGateAndUp(t *testing.T) {
+	bk := &fakeDeployBroker{
+		canIDeployFunc: func(_ context.Context, _ broker.CanIDeployInput) (*broker.CanIDeployResult, error) {
+			return &broker.CanIDeployResult{Deployable: true, Reason: "ok"}, nil
+		},
+	}
+	cp := &fakeCompose{ps: []composeadapter.ContainerStatus{{Service: "api", State: "running", Health: "healthy"}}}
+
+	deps := baseDeps(bk, cp)
+	deps.SnapshotDir = t.TempDir()
+
+	cfg := baseConfig()
+	cfg.Deploy.Pull = "always"
+
+	report, err := release.Deploy(context.Background(), cfg, "production", "", false, deps)
+	require.NoError(t, err)
+	require.NotNil(t, report)
+	require.Len(t, cp.pullCalls, 1, "pull should fire exactly once")
+	assert.Equal(t, []string{"api"}, cp.pullCalls[0])
+	require.Len(t, cp.upCalls, 1, "compose up should still fire after pull")
+}
+
+// TestDeploy_PullNeverDoesNotPull proves the default path is unchanged.
+func TestDeploy_PullNeverDoesNotPull(t *testing.T) {
+	bk := &fakeDeployBroker{
+		canIDeployFunc: func(_ context.Context, _ broker.CanIDeployInput) (*broker.CanIDeployResult, error) {
+			return &broker.CanIDeployResult{Deployable: true}, nil
+		},
+	}
+	cp := &fakeCompose{ps: []composeadapter.ContainerStatus{{Service: "api", State: "running", Health: "healthy"}}}
+
+	deps := baseDeps(bk, cp)
+	deps.SnapshotDir = t.TempDir()
+
+	cfg := baseConfig()
+	// Pull left as zero-value ("") — pipeline treats anything != "always" as no-op.
+
+	_, err := release.Deploy(context.Background(), cfg, "production", "", false, deps)
+	require.NoError(t, err)
+	assert.Empty(t, cp.pullCalls, "pull must not fire when deploy.pull != always")
+}
+
+// TestDeploy_PullFailureBlocksUp proves that a pull error aborts the deploy
+// before compose up is attempted (we never want to ship stale images because
+// pull silently failed).
+func TestDeploy_PullFailureBlocksUp(t *testing.T) {
+	bk := &fakeDeployBroker{
+		canIDeployFunc: func(_ context.Context, _ broker.CanIDeployInput) (*broker.CanIDeployResult, error) {
+			return &broker.CanIDeployResult{Deployable: true}, nil
+		},
+	}
+	cp := &fakeCompose{pullErr: errors.New("registry 500")}
+
+	deps := baseDeps(bk, cp)
+	deps.SnapshotDir = t.TempDir()
+	deps.RollbackMode = release.RollbackOff
+
+	cfg := baseConfig()
+	cfg.Deploy.Pull = "always"
+
+	_, err := release.Deploy(context.Background(), cfg, "production", "", false, deps)
+	require.Error(t, err)
+	assert.Empty(t, cp.upCalls, "compose up must not run when pull fails")
+	assert.Empty(t, bk.recordCalls, "record-deployment must not run when pull fails")
 }
 
 func TestDeploy_MissingDeps_Errors(t *testing.T) {

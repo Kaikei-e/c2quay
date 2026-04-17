@@ -151,6 +151,7 @@ versioning:
 deploy:
   wait: true
   wait_timeout: 180s
+  pull: never   # never | always | missing — see ADR 0010
   smoke:
     command: ./scripts/smoke.sh
     timeout: 30s
@@ -183,6 +184,15 @@ independently-versioned services. See
 for the background incident.
 
 A worked example lives in [`docs/config.example.yml`](docs/config.example.yml).
+
+**`deploy.pull`.** c2quay does not build images and by default does not
+pull them either — the operator (or CI) is responsible for image
+freshness before `c2quay deploy` runs. Set `deploy.pull: always` to run
+`docker compose pull <services>` between the gate and `compose up`;
+this fits the registry-fed rollout shape. For locally-built images,
+run `docker compose build` before `c2quay deploy`. See
+[ADR 0010](docs/adr/0010-image-freshness-contract.md) for the decision
+and [runbook](docs/runbooks/image-freshness.md) for the workflows.
 
 The split is deliberate: Compose owns *what the service is*, c2quay owns *how the release happens*. c2quay never touches the service definition.
 
