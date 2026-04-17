@@ -26,9 +26,15 @@ type CanIDeployResult struct {
 // Relation names exposed by the Pact Broker index. Modern brokers split
 // can-i-deploy into scope-specific relations; older / self-hosted forks
 // still expose the generic one. We try the scoped relation first.
+//
+// RelMatrix is the explicit relation to the matrix endpoint used by the
+// aggregate (all_or_nothing) path. Current Pact Broker releases expose
+// it; older ones did not, which is why the aggregate path also knows
+// how to fall back to pb:can-i-deploy or a direct ${base}/matrix URL.
 const (
 	RelCanIDeployToEnvironment = "pb:can-i-deploy-pacticipant-version-to-environment"
 	RelCanIDeployGeneric       = "pb:can-i-deploy"
+	RelMatrix                  = "pb:matrix"
 )
 
 // CanIDeploy asks the broker whether it's safe to ship the given pacticipant

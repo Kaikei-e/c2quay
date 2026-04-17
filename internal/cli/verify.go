@@ -59,12 +59,6 @@ func runVerify(ctx context.Context, rt *runtimeCtx, onlyService string) error {
 			broker.RelCanIDeployToEnvironment, broker.RelCanIDeployGeneric,
 		)}
 	}
-	if env, ok := rt.cfg.LookupEnvironment(rt.flags.envName); ok && env.AllOrNothing && !bc.HasRelation(broker.RelCanIDeployGeneric) {
-		return &ExitError{Code: ExitOperatorError, Err: fmt.Errorf(
-			"environment %q sets all_or_nothing: true but broker does not expose %q (required for aggregate can-i-deploy)",
-			rt.flags.envName, broker.RelCanIDeployGeneric,
-		)}
-	}
 
 	report, err := release.Verify(ctx, rt.cfg, rt.flags.envName, onlyService, release.VerifyDeps{
 		Broker:   bc,

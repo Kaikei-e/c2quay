@@ -57,23 +57,29 @@ type PacticipantVerdict struct {
 // monolithic rollout case where individual `can-i-deploy` calls wrongly
 // assume every other service stays on its currently-deployed version.
 //
-// Requires the generic pb:can-i-deploy relation. The scope-specific
-// pb:can-i-deploy-pacticipant-version-to-environment relation is a single-
-// pacticipant shortcut and cannot represent a multi-selector query, so we
-// do not try to use it here.
+// URL resolution order:
+//
+//  1. pb:matrix — the explicit matrix relation exposed by current
+//     Pact Broker releases.
+//  2. pb:can-i-deploy — the legacy generic relation, still present on
+//     older forks.
+//  3. ${broker_base}/matrix — a direct URL built from the broker's base.
+//     Pact Broker has served the matrix endpoint at this path since
+//     long before the HAL relations were added, so this is a safe
+//     fallback for modern brokers that only advertise the scope-specific
+//     pb:can-i-deploy-pacticipant-version-to-environment relation.
+//
+// The scope-specific relation itself is a single-pacticipant shortcut
+// and cannot represent a multi-selector query, so we do not try to use
+// it for aggregate.
 func (c *Client) CanIDeployMany(ctx context.Context, env string, selectors []CanIDeploySelector) (*CanIDeploySetResult, error) {
 	if len(selectors) == 0 {
 		return nil, fmt.Errorf("can-i-deploy many: no selectors supplied")
 	}
-	if !c.HasRelation(RelCanIDeployGeneric) {
-		return nil, fmt.Errorf("%w: %q", ErrRelationMissing, RelCanIDeployGeneric)
-	}
-	link, err := c.Link(RelCanIDeployGeneric)
+	base, err := c.resolveMatrixURL()
 	if err != nil {
 		return nil, err
 	}
-
-	base := stripQueryTemplate(link.Href)
 
 	q := url.Values{}
 	for _, s := range selectors {
@@ -222,4 +228,32 @@ func stripQueryTemplate(href string) string {
 		return base
 	}
 	return href
+}
+
+// resolveMatrixURL picks the best known URL for the matrix endpoint.
+// Prefers explicit HAL relations so we track whatever the broker
+// advertises, and falls back to ${base}/matrix as a last resort because
+// the path has been stable across Pact Broker releases long enough to
+// rely on when no relation is published. Returning an error is kept as
+// the signature shape so future tightening (e.g. rejecting non-Pact
+// hosts) can slot in without touching callers.
+func (c *Client) resolveMatrixURL() (string, error) {
+	if c.HasRelation(RelMatrix) {
+		link, err := c.Link(RelMatrix)
+		if err != nil {
+			return "", err
+		}
+		return stripQueryTemplate(link.Href), nil
+	}
+	if c.HasRelation(RelCanIDeployGeneric) {
+		link, err := c.Link(RelCanIDeployGeneric)
+		if err != nil {
+			return "", err
+		}
+		return stripQueryTemplate(link.Href), nil
+	}
+	if c.base == nil {
+		return "", fmt.Errorf("broker base URL is not initialized")
+	}
+	return strings.TrimRight(c.base.String(), "/") + "/matrix", nil
 }

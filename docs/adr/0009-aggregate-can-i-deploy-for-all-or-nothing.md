@@ -42,13 +42,25 @@ repeated `--pacticipant X --version V` flags. c2quay had the
    selector. The broker's summary is the deploy-the-set verdict, and
    per-row verification results drive per-service reporting.
 
-2. **Generic `pb:can-i-deploy` is required for aggregate mode.** The
-   scoped `pb:can-i-deploy-pacticipant-version-to-environment` relation
-   from ADR 0008 is single-pacticipant by construction and cannot carry a
-   multi-selector query. `verify` and `deploy` now refuse to start when
-   `all_or_nothing: true` but the broker index lacks
-   `pb:can-i-deploy`. Silently falling back to the per-service path would
-   restore the exact failure mode this ADR exists to fix.
+2. **Matrix URL resolution with fallbacks.** Aggregate mode resolves the
+   matrix endpoint in this order:
+
+   1. `pb:matrix` — the explicit relation exposed by current Pact Broker
+      releases and PactFlow.
+   2. `pb:can-i-deploy` — the legacy generic relation, kept for older
+      self-hosted forks that still advertise it.
+   3. `${broker_base}/matrix` — constructed directly from the broker's
+      base URL. Pact Broker has served the matrix endpoint at this path
+      since long before HAL relations existed, so it is a safe last
+      resort when the broker advertises only the scope-specific
+      `pb:can-i-deploy-pacticipant-version-to-environment` relation from
+      ADR 0008.
+
+   The scoped relation itself is single-pacticipant and cannot carry a
+   multi-selector query, so we do not attempt to coerce it into
+   aggregate use. We also do **not** fall back to per-service queries on
+   relation absence, which would silently restore the exact failure
+   mode this ADR exists to fix.
 
 3. **No verification record ⇒ gated.** If a selector appears in the
    candidate set but the matrix response contains no row naming it as
@@ -113,10 +125,17 @@ candidate set but has no integration partner the broker knows about.
   matrix rows is cheap compared to 13 round trips.
 - **Good:** `all_or_nothing: false` is unchanged, so teams that chose
   per-service semantics keep them.
-- **Trade-off:** aggregate mode requires the generic `pb:can-i-deploy`
-  relation. ADR 0008 established that modern brokers expose it alongside
-  the scoped relation, so in practice this affects only very old forks;
-  those forks would not implement the matrix endpoint correctly anyway.
+- **Good:** the resolution order works against the current Pact Broker
+  (pb:matrix), older self-hosted forks (pb:can-i-deploy), and modern
+  brokers that advertise only the scope-specific relation but still
+  serve /matrix at the known path. No operator intervention is needed
+  when upgrading the broker — c2quay follows whichever relation is
+  published and reuses the direct URL otherwise.
+- **Trade-off:** the direct `${base}/matrix` fallback assumes the
+  endpoint exists at that path. This is true for Pact Broker and
+  PactFlow, and a 404 surfaces through `ErrUnexpectedStatus` with the
+  attempted URL in the error message, so misconfigured hosts are
+  diagnosable.
 - **Trade-off:** aggregate responses are larger than per-service ones.
   13 services × integration partners is still well under 1 MB in
   practice; we read the full body before decoding, matching the existing

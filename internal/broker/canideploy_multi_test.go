@@ -170,24 +170,62 @@ func TestCanIDeployMany_UnknownPacticipant(t *testing.T) {
 	assert.Contains(t, verdicts["orphan"].Reason, "orphan@v3")
 }
 
-func TestCanIDeployMany_MissingRelation(t *testing.T) {
+// Current Pact Broker releases advertise the matrix endpoint as
+// pb:matrix. The aggregate path must prefer this over the legacy
+// pb:can-i-deploy.
+func TestCanIDeployMany_PrefersPbMatrix(t *testing.T) {
 	tb := newTestBroker(t)
 	tb.index(map[string]broker.Link{
-		// Only the scoped relation exists. Aggregate requires the generic
-		// matrix endpoint.
-		"pb:can-i-deploy-pacticipant-version-to-environment": {
-			Href: tb.URL() + "/can-i-deploy/provider/{pacticipant}/version/{version}/to-environment/{environment}", Templated: true,
-		},
+		"pb:matrix":       {Href: tb.URL() + "/matrix-v2", Templated: false},
+		"pb:can-i-deploy": {Href: tb.URL() + "/should-not-be-used", Templated: false},
+	})
+	tb.on("GET /matrix-v2", func(w http.ResponseWriter, _ *http.Request) {
+		tr := true
+		_ = json.NewEncoder(w).Encode(matrixResponse(&tr, "ok"))
 	})
 	c, err := broker.New(broker.Options{BaseURL: tb.URL()})
 	require.NoError(t, err)
 	require.NoError(t, c.Start(context.Background()))
 
-	_, err = c.CanIDeployMany(context.Background(), "production", []broker.CanIDeploySelector{
+	res, err := c.CanIDeployMany(context.Background(), "production", []broker.CanIDeploySelector{
 		{Pacticipant: "api", Version: "v1"},
 	})
-	require.Error(t, err)
-	assert.ErrorIs(t, err, broker.ErrRelationMissing)
+	require.NoError(t, err)
+	assert.True(t, res.Deployable)
+}
+
+// Modern brokers expose only the scoped per-pacticipant relation in
+// their index, yet the /matrix endpoint is a long-standing Pact Broker
+// URL. Aggregate mode therefore falls back to constructing the URL from
+// the broker base when no relation is advertised.
+func TestCanIDeployMany_FallsBackToDirectMatrix(t *testing.T) {
+	tb := newTestBroker(t)
+	tb.index(map[string]broker.Link{
+		"pb:can-i-deploy-pacticipant-version-to-environment": {
+			Href:      tb.URL() + "/can-i-deploy/provider/{pacticipant}/version/{version}/to-environment/{environment}",
+			Templated: true,
+		},
+	})
+	var called bool
+	tb.on("GET /matrix", func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		// Query is still bracket-array form even without a HAL template
+		// to guide us.
+		assert.Equal(t, []string{"api"}, r.URL.Query()["q[][pacticipant]"])
+		assert.Equal(t, "cvp", r.URL.Query().Get("latestby"))
+		tr := true
+		_ = json.NewEncoder(w).Encode(matrixResponse(&tr, "ok"))
+	})
+	c, err := broker.New(broker.Options{BaseURL: tb.URL()})
+	require.NoError(t, err)
+	require.NoError(t, c.Start(context.Background()))
+
+	res, err := c.CanIDeployMany(context.Background(), "production", []broker.CanIDeploySelector{
+		{Pacticipant: "api", Version: "v1"},
+	})
+	require.NoError(t, err)
+	assert.True(t, res.Deployable)
+	assert.True(t, called, "direct /matrix URL must be hit when no HAL relation points to it")
 }
 
 func TestCanIDeployMany_TemplatedQueryHref(t *testing.T) {

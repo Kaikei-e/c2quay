@@ -89,10 +89,11 @@ func fakeBroker(t *testing.T, deployable bool, reason string) *httptest.Server {
 	return srv
 }
 
-// brokerWithoutMatrix is the same as fakeBroker but omits the
-// pb:can-i-deploy relation. Used to assert that all_or_nothing refuses to
-// run when the broker cannot serve aggregate queries.
-func brokerWithoutMatrix(t *testing.T) *httptest.Server {
+// brokerScopedOnly models a modern Pact Broker whose index exposes only
+// the scope-specific can-i-deploy relation (no pb:matrix, no legacy
+// pb:can-i-deploy). Aggregate mode must still work by falling back to
+// the direct ${base}/matrix URL.
+func brokerScopedOnly(t *testing.T, deployable bool, reason string) *httptest.Server {
 	t.Helper()
 	var srv *httptest.Server
 	mux := http.NewServeMux()
@@ -110,6 +111,25 @@ func brokerWithoutMatrix(t *testing.T) *httptest.Server {
 				},
 			},
 		})
+	})
+	mux.HandleFunc("/matrix", func(w http.ResponseWriter, r *http.Request) {
+		d := deployable
+		q := r.URL.Query()
+		payload := map[string]any{
+			"summary": map[string]any{"deployable": &d, "reason": reason},
+		}
+		if pacts, versions := q["q[][pacticipant]"], q["q[][version]"]; len(pacts) > 0 && len(pacts) == len(versions) {
+			rows := make([]map[string]any, 0, len(pacts))
+			for i, p := range pacts {
+				rows = append(rows, map[string]any{
+					"consumer":           map[string]any{"name": p, "version": map[string]any{"number": versions[i]}},
+					"provider":           map[string]any{"name": p + "-partner", "version": map[string]any{"number": versions[i]}},
+					"verificationResult": map[string]any{"success": d, "_links": map[string]any{"self": map[string]any{"href": srv.URL + "/v/" + p}}},
+				})
+			}
+			payload["matrix"] = rows
+		}
+		_ = json.NewEncoder(w).Encode(payload)
 	})
 	srv = httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
@@ -214,17 +234,16 @@ func TestE2E_Verify_AllOrNothing_SingleMatrixCall(t *testing.T) {
 	assert.Equal(t, 1, calls, "all_or_nothing must issue exactly one matrix request")
 }
 
-// When the broker only exposes the scoped (single-pacticipant) relation,
-// all_or_nothing should refuse to run rather than silently fall back to
-// per-service queries, which is what reintroduced the production incident.
-func TestE2E_Verify_AllOrNothing_RelationMissing(t *testing.T) {
+// Modern brokers expose only the scope-specific pb:can-i-deploy-...-to-
+// environment relation, with no HAL link to the matrix endpoint. Aggregate
+// mode has to fall back to ${base}/matrix directly; failing to do so would
+// block the common case of deploying against an up-to-date Pact Broker.
+func TestE2E_Verify_AllOrNothing_FallsBackToDirectMatrix(t *testing.T) {
 	bin := buildBinary(t)
-	srv := brokerWithoutMatrix(t)
+	srv := brokerScopedOnly(t, true, "ok")
 	dir := fixtureDir(t)
 
 	code, out, errOut := runC2Q(t, bin, dir, srv.URL, "verify", "--env", "production")
-	assert.NotEqual(t, 0, code)
-	combined := out + errOut
-	assert.Contains(t, combined, "all_or_nothing")
-	assert.Contains(t, combined, "pb:can-i-deploy")
+	assert.Equal(t, 0, code, "stderr=%s stdout=%s", errOut, out)
+	assert.Contains(t, out, "Summary: 2/2 passed")
 }

@@ -173,10 +173,12 @@ send the whole candidate set to the broker's matrix endpoint in a single
 `can-i-deploy` request. The broker evaluates the services together, so a
 release that updates N consumers and their provider simultaneously is not
 gated on the (nonexistent) pact between the new consumer and the *current
-prod* provider. Requires a broker exposing the generic `pb:can-i-deploy`
-relation — both stock Pact Broker and PactFlow do. When `false` (default),
-c2quay falls back to per-service `can-i-deploy` calls, which is the right
-shape for independently-versioned services. See
+prod* provider. Works against current Pact Broker (`pb:matrix`), older
+forks (`pb:can-i-deploy`), and modern brokers that only advertise the
+scope-specific relation — in the last case c2quay constructs
+`${broker_base}/matrix` directly. When `false` (default), c2quay falls
+back to per-service `can-i-deploy` calls, which is the right shape for
+independently-versioned services. See
 [ADR 0009](docs/adr/0009-aggregate-can-i-deploy-for-all-or-nothing.md)
 for the background incident.
 

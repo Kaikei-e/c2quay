@@ -3,7 +3,6 @@ package cli
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log/slog"
 	"path/filepath"
 
@@ -84,12 +83,6 @@ func runDeploy(ctx context.Context, rt *runtimeCtx, onlyService string, dryRun b
 	if err := bc.Start(ctx); err != nil {
 		log.Error("broker contact failed", slog.String("url", rt.cfg.Broker.BaseURL), slog.String("err", err.Error()))
 		return &ExitError{Code: ExitOperatorError, Err: err}
-	}
-	if env, ok := rt.cfg.LookupEnvironment(rt.flags.envName); ok && env.AllOrNothing && !bc.HasRelation(broker.RelCanIDeployGeneric) {
-		return &ExitError{Code: ExitOperatorError, Err: fmt.Errorf(
-			"environment %q sets all_or_nothing: true but broker does not expose %q (required for aggregate can-i-deploy)",
-			rt.flags.envName, broker.RelCanIDeployGeneric,
-		)}
 	}
 	log.Info("step completed", slog.String("step", "broker-start"), slog.String("url", rt.cfg.Broker.BaseURL))
 
