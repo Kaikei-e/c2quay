@@ -75,6 +75,10 @@ type UpOptions struct {
 	RemoveOrphans bool
 	Wait          bool
 	Timeout       time.Duration
+	// ForceRecreate passes `--force-recreate` to compose up. Intended as a
+	// per-deploy debug escape hatch for the fresh-build-same-tag case where
+	// Compose's digest-diff misfires. See ADR 0011.
+	ForceRecreate bool
 	// ExtraFiles are appended after the adapter's base compose files for this
 	// single call. Used by the rollback flow to inject a pinned-image override
 	// without rebuilding the adapter.

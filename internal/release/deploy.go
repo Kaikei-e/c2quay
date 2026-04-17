@@ -32,6 +32,9 @@ type DeployDeps struct {
 	// RollbackTimeout bounds the rollback's own `compose up --wait`. Defaults
 	// to 2× Deploy.WaitTimeout, or 3 minutes if neither is set.
 	RollbackTimeout time.Duration
+	// ForceRecreate passes `--force-recreate` through to compose up. Debug
+	// escape hatch for the fresh-build-same-tag case. See ADR 0011.
+	ForceRecreate bool
 }
 
 // DeployReport captures what happened, successful or not. On failure the
@@ -160,6 +163,7 @@ func Deploy(ctx context.Context, cfg *config.Config, envName, onlyService string
 		RemoveOrphans: true,
 		Wait:          cfg.Deploy.Wait || cfg.Deploy.WaitTimeout > 0,
 		Timeout:       cfg.Deploy.WaitTimeout,
+		ForceRecreate: deps.ForceRecreate,
 	}, deps.Progress)
 	if upErr != nil {
 		deps.UI.Fail("compose up", upErr.Error())

@@ -44,7 +44,9 @@ Every arrow points downward; lower layers do not import upward.
 (c') pull (optional) ─ if deploy.pull == always, `docker compose pull <svcs>`
                        runs after the gate and before (d). Failure aborts the
                        deploy before anything mutates. See ADR 0010.
-(d) compose up       ─ --remove-orphans --wait, with ps cross-check
+(d) compose up       ─ --remove-orphans --wait [--force-recreate], with ps
+                       cross-check. --force-recreate is per-invocation and
+                       emits a slog.Warn on use. See ADR 0011.
 (e) smoke (optional) ─ shell command with TARGET_ENV injection
 (d')/(e') auto-rollback on (d)/(e) failure when --auto-rollback=on (default):
                        write pinned-image override, re-run `compose up --wait`,

@@ -21,6 +21,7 @@ func newDeployCommand(rt *runtimeCtx) *cobra.Command {
 		service          string
 		dryRun           bool
 		autoRollbackFlag string
+		forceRecreate    bool
 	)
 	cmd := &cobra.Command{
 		Use:   "deploy",
@@ -33,17 +34,19 @@ func newDeployCommand(rt *runtimeCtx) *cobra.Command {
 			if err != nil {
 				return &ExitError{Code: ExitOperatorError, Err: err}
 			}
-			return runDeploy(cmd.Context(), rt, service, dryRun, mode)
+			return runDeploy(cmd.Context(), rt, service, dryRun, mode, forceRecreate)
 		},
 	}
 	cmd.Flags().StringVar(&service, "service", "", "limit to a single service")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "run lock+snapshot+gate only, do not invoke docker compose up")
 	cmd.Flags().StringVar(&autoRollbackFlag, "auto-rollback", "on",
 		"on failure, restore pre-deploy images. values: on (default) | off | dry-run")
+	cmd.Flags().BoolVar(&forceRecreate, "force-recreate", false,
+		"debug escape hatch: pass --force-recreate to `docker compose up` for this deploy only (ADR 0011)")
 	return cmd
 }
 
-func runDeploy(ctx context.Context, rt *runtimeCtx, onlyService string, dryRun bool, rollbackMode release.RollbackMode) error {
+func runDeploy(ctx context.Context, rt *runtimeCtx, onlyService string, dryRun bool, rollbackMode release.RollbackMode, forceRecreate bool) error {
 	tw := output.NewText(rt.stdout)
 	log := rt.logger
 
@@ -87,15 +90,16 @@ func runDeploy(ctx context.Context, rt *runtimeCtx, onlyService string, dryRun b
 	log.Info("step completed", slog.String("step", "broker-start"), slog.String("url", rt.cfg.Broker.BaseURL))
 
 	report, derr := release.Deploy(ctx, rt.cfg, rt.flags.envName, onlyService, dryRun, release.DeployDeps{
-		Broker:       bc,
-		Compose:      adapter,
-		Strategy:     strat,
-		Logger:       log,
-		UI:           tw,
-		Progress:     rt.stderr,
-		Stderr:       rt.stderr,
-		SnapshotDir:  release.DefaultSnapshotDir(),
-		RollbackMode: rollbackMode,
+		Broker:        bc,
+		Compose:       adapter,
+		Strategy:      strat,
+		Logger:        log,
+		UI:            tw,
+		Progress:      rt.stderr,
+		Stderr:        rt.stderr,
+		SnapshotDir:   release.DefaultSnapshotDir(),
+		RollbackMode:  rollbackMode,
+		ForceRecreate: forceRecreate,
 	})
 	if derr != nil {
 		if report != nil && report.FailedAtStep != "" {

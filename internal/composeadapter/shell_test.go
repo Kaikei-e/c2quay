@@ -128,6 +128,31 @@ func TestShellAdapter_Up_RealFailureNotMasked(t *testing.T) {
 	require.Error(t, err)
 }
 
+// TestShellAdapter_Up_ForceRecreate proves ADR 0011: UpOptions.ForceRecreate
+// appends `--force-recreate` to the compose args.
+func TestShellAdapter_Up_ForceRecreate(t *testing.T) {
+	fe := &fakeExec{outputs: map[string]fakeResponse{
+		key("docker", []string{"compose", "-f", "compose.yaml", "-p", "app", "ps", "--all", "--format", "json"}): {
+			stdout: []byte(`[{"Service":"api","State":"running","Health":"healthy"}]`),
+		},
+	}}
+	a := composeadapter.NewShell(composeadapter.ShellOptions{
+		ComposeFiles: []string{"compose.yaml"},
+		ProjectName:  "app",
+		Exec:         fe,
+	})
+	err := a.Up(context.Background(), composeadapter.UpOptions{
+		RemoveOrphans: true,
+		ForceRecreate: true,
+		Services:      []string{"api"},
+	}, io.Discard)
+	require.NoError(t, err)
+	require.Len(t, fe.streamed, 1)
+	assert.Equal(t,
+		[]string{"docker", "compose", "-f", "compose.yaml", "-p", "app", "up", "-d", "--remove-orphans", "--force-recreate", "api"},
+		fe.streamed[0])
+}
+
 // TestShellAdapter_Pull proves ADR 0010: Pull shells out to
 // `docker compose pull <services>`.
 func TestShellAdapter_Pull(t *testing.T) {

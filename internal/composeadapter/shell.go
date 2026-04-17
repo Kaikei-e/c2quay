@@ -158,14 +158,21 @@ func (a *ShellAdapter) Pull(ctx context.Context, services []string, progress io.
 	return nil
 }
 
-// Up runs `docker compose up -d [--wait] [--remove-orphans]`. It compensates
-// for a known bug (docker/compose#10596) where `--wait` returns exit 1 even
-// when every service is healthy, by cross-checking `ps` after the call.
+// Up runs `docker compose up -d [--wait] [--remove-orphans] [--force-recreate]`.
+// It compensates for a known bug (docker/compose#10596) where `--wait` returns
+// exit 1 even when every service is healthy, by cross-checking `ps` after the
+// call.
 func (a *ShellAdapter) Up(ctx context.Context, opts UpOptions, progress io.Writer) error {
 	args := a.baseArgsWithExtra(opts.ExtraFiles)
 	args = append(args, "up", "-d")
 	if opts.RemoveOrphans {
 		args = append(args, "--remove-orphans")
+	}
+	if opts.ForceRecreate {
+		args = append(args, "--force-recreate")
+		a.log.Warn("compose up invoked with --force-recreate (ADR 0011 debug escape hatch)",
+			slog.Int("services", len(opts.Services)),
+		)
 	}
 	if opts.Wait {
 		args = append(args, "--wait")

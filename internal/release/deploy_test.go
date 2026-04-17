@@ -345,6 +345,26 @@ func TestDeploy_PullNeverDoesNotPull(t *testing.T) {
 	assert.Empty(t, cp.pullCalls, "pull must not fire when deploy.pull != always")
 }
 
+// TestDeploy_ForceRecreateReachesUpOptions proves ADR 0011: the flag is
+// plumbed from DeployDeps through to UpOptions.
+func TestDeploy_ForceRecreateReachesUpOptions(t *testing.T) {
+	bk := &fakeDeployBroker{
+		canIDeployFunc: func(_ context.Context, _ broker.CanIDeployInput) (*broker.CanIDeployResult, error) {
+			return &broker.CanIDeployResult{Deployable: true}, nil
+		},
+	}
+	cp := &fakeCompose{ps: []composeadapter.ContainerStatus{{Service: "api", State: "running", Health: "healthy"}}}
+
+	deps := baseDeps(bk, cp)
+	deps.SnapshotDir = t.TempDir()
+	deps.ForceRecreate = true
+
+	_, err := release.Deploy(context.Background(), baseConfig(), "production", "", false, deps)
+	require.NoError(t, err)
+	require.Len(t, cp.upCalls, 1)
+	assert.True(t, cp.upCalls[0].ForceRecreate, "force-recreate must reach compose UpOptions")
+}
+
 // TestDeploy_PullFailureBlocksUp proves that a pull error aborts the deploy
 // before compose up is attempted (we never want to ship stale images because
 // pull silently failed).

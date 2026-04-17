@@ -96,6 +96,7 @@ c2quay deploy --env production --service api
 c2quay deploy --env production --dry-run
 c2quay deploy --env production --auto-rollback=off       # keep current images on failure
 c2quay deploy --env production --auto-rollback=dry-run   # preview the rollback plan
+c2quay deploy --env production --force-recreate          # ADR 0011 escape hatch
 ```
 
 Auto-rollback is **on by default**. When `docker compose up` or the smoke
@@ -193,6 +194,15 @@ this fits the registry-fed rollout shape. For locally-built images,
 run `docker compose build` before `c2quay deploy`. See
 [ADR 0010](docs/adr/0010-image-freshness-contract.md) for the decision
 and [runbook](docs/runbooks/image-freshness.md) for the workflows.
+
+**`--force-recreate`.** `c2quay deploy --force-recreate` passes the
+flag through to `docker compose up` for the current deploy only. This
+is a debug escape hatch for the fresh-build-same-tag case where
+Compose's digest diff misfires — habitual use is discouraged and the
+adapter emits a `slog.Warn` when the flag fires, so the audit log
+shows which deploys used it. See
+[ADR 0011](docs/adr/0011-force-recreate-escape-hatch.md) and the
+[tag-reuse runbook](docs/runbooks/tag-reuse-recreate.md).
 
 The split is deliberate: Compose owns *what the service is*, c2quay owns *how the release happens*. c2quay never touches the service definition.
 
