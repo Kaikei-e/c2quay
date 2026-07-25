@@ -1,0 +1,21 @@
+compose:
+  files:
+    - compose.yaml
+  project_name: c2quay-gate-only-missing
+
+broker:
+  base_url: http://127.0.0.1:1
+
+versioning:
+  strategy: manifest_file
+  options:
+    path: versions.json
+
+environments:
+  production:
+    all_or_nothing: false
+    services:
+      api:
+        pacticipant: api
+      ghost:
+        pacticipant: ghost

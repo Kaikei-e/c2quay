@@ -84,6 +84,15 @@ func Deploy(ctx context.Context, cfg *config.Config, envName, onlyService string
 	report.Plan = plan
 	deps.UI.Step("plan", fmt.Sprintf("%d service(s)", len(plan.Services)))
 
+	// (1a) plan-time compose coverage validation — fail fast, BEFORE the
+	// gate runs. See ADR 0013: a mapped service missing from Compose (and
+	// not marked gate_only) must never reach `docker compose up`, where it
+	// would hard-fail the ENTIRE deploy after every other service already
+	// cleared the Pact gate.
+	if err := ValidateComposeCoverage(ctx, deps.Compose, plan, dryRun, deps.UI); err != nil {
+		return report, fmt.Errorf("compose coverage: %w", err)
+	}
+
 	pre, err := CaptureSnapshot(ctx, deps.Compose, envName, map[string]versioning.Release{})
 	if err != nil {
 		return report, fmt.Errorf("pre snapshot: %w", err)
@@ -137,47 +146,59 @@ func Deploy(ctx context.Context, cfg *config.Config, envName, onlyService string
 		return report, nil
 	}
 
-	// (2a) optional pull — see ADR 0010. Runs only when the operator has
-	// opted in via `deploy.pull: always`; `missing` is handled natively by
-	// Compose during up, so we skip it here.
-	if cfg.Deploy.Pull == "always" {
-		pullStart := time.Now()
-		if err := deps.Compose.Pull(ctx, plan.Services, deps.Progress); err != nil {
-			deps.UI.Fail("compose pull", err.Error())
-			return failReport(report, StepComposeUp, err)
+	// (2a)+(3) optional pull + compose up. gate_only services (ADR 0013)
+	// never reach either call: they are excluded from plan.DeployServices.
+	// If DeployServices is empty (every service in scope is gate_only),
+	// we skip compose entirely rather than call Up with a zero-length
+	// service list, which Compose would interpret as "every service in
+	// the project" — the opposite of what an empty deploy target means
+	// here.
+	if len(plan.DeployServices) == 0 {
+		deps.UI.Warn("compose up", "skipped: no deploy-target services in plan (all mapped services are gate_only)")
+		log.Info("compose up skipped", slog.String("reason", "all mapped services are gate_only"))
+	} else {
+		// (2a) optional pull — see ADR 0010. Runs only when the operator has
+		// opted in via `deploy.pull: always`; `missing` is handled natively by
+		// Compose during up, so we skip it here.
+		if cfg.Deploy.Pull == "always" {
+			pullStart := time.Now()
+			if err := deps.Compose.Pull(ctx, plan.DeployServices, deps.Progress); err != nil {
+				deps.UI.Fail("compose pull", err.Error())
+				return failReport(report, StepComposeUp, err)
+			}
+			deps.UI.Ok("compose pull", fmt.Sprintf("%d service(s)", len(plan.DeployServices)))
+			log.Info("compose pull completed",
+				slog.GroupAttrs("compose",
+					slog.String("policy", cfg.Deploy.Pull),
+					slog.Int("services", len(plan.DeployServices)),
+					slog.Duration("duration", time.Since(pullStart)),
+				),
+			)
 		}
-		deps.UI.Ok("compose pull", fmt.Sprintf("%d service(s)", len(plan.Services)))
-		log.Info("compose pull completed",
+
+		// (3) compose up — known --wait bug is handled by the adapter.
+		composeStart := time.Now()
+		upErr := deps.Compose.Up(ctx, composeadapter.UpOptions{
+			Services:      plan.DeployServices,
+			RemoveOrphans: true,
+			Wait:          cfg.Deploy.Wait || cfg.Deploy.WaitTimeout > 0,
+			Timeout:       cfg.Deploy.WaitTimeout,
+			ForceRecreate: deps.ForceRecreate,
+		}, deps.Progress)
+		if upErr != nil {
+			deps.UI.Fail("compose up", upErr.Error())
+			report.Post, _ = CaptureSnapshot(ctx, deps.Compose, envName, plan.Releases)
+			maybeRollback(ctx, deps, cfg, report, StepComposeUp)
+			return failReport(report, StepComposeUp, upErr)
+		}
+		deps.UI.Ok("compose up", fmt.Sprintf("%d service(s) running", len(plan.DeployServices)))
+		log.Info("compose up completed",
 			slog.GroupAttrs("compose",
-				slog.String("policy", cfg.Deploy.Pull),
-				slog.Int("services", len(plan.Services)),
-				slog.Duration("duration", time.Since(pullStart)),
+				slog.Int("services", len(plan.DeployServices)),
+				slog.Duration("duration", time.Since(composeStart)),
 			),
 		)
 	}
-
-	// (3) compose up — known --wait bug is handled by the adapter.
-	composeStart := time.Now()
-	upErr := deps.Compose.Up(ctx, composeadapter.UpOptions{
-		Services:      plan.Services,
-		RemoveOrphans: true,
-		Wait:          cfg.Deploy.Wait || cfg.Deploy.WaitTimeout > 0,
-		Timeout:       cfg.Deploy.WaitTimeout,
-		ForceRecreate: deps.ForceRecreate,
-	}, deps.Progress)
-	if upErr != nil {
-		deps.UI.Fail("compose up", upErr.Error())
-		report.Post, _ = CaptureSnapshot(ctx, deps.Compose, envName, plan.Releases)
-		maybeRollback(ctx, deps, cfg, report, StepComposeUp)
-		return failReport(report, StepComposeUp, upErr)
-	}
-	deps.UI.Ok("compose up", fmt.Sprintf("%d service(s) running", len(plan.Services)))
-	log.Info("compose up completed",
-		slog.GroupAttrs("compose",
-			slog.Int("services", len(plan.Services)),
-			slog.Duration("duration", time.Since(composeStart)),
-		),
-	)
 
 	// (4) smoke
 	if cfg.Deploy.Smoke.Command != "" {

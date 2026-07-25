@@ -24,6 +24,12 @@ type Adapter interface {
 	// This is the source of truth for services and image references.
 	RenderConfigJSON(ctx context.Context) (*RenderedConfig, error)
 
+	// ConfigServices returns the service names in the resolved Compose
+	// config (`docker compose config --services`). Used by plan-time
+	// validation to confirm every non-gate_only mapped service actually
+	// exists in Compose before the Pact gate runs. See ADR 0013.
+	ConfigServices(ctx context.Context) ([]string, error)
+
 	// PsJSON returns the current container states for the project.
 	PsJSON(ctx context.Context) ([]ContainerStatus, error)
 

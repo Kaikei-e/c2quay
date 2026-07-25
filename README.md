@@ -186,6 +186,23 @@ for the background incident.
 
 A worked example lives in [`docs/config.example.yml`](docs/config.example.yml).
 
+**`gate_only`.** Set `gate_only: true` on a service mapping when that
+service is not declared in this box's `compose.yaml` — typically because it
+runs on a separate host (a remote GPU worker, a managed dependency you
+don't orchestrate with Compose here). c2quay still gates it (can-i-deploy /
+aggregate matrix) and records its deployment to the broker, but never
+passes it to `docker compose up`, `pull`, `--force-recreate`, or a
+rollback. Before the gate runs, c2quay resolves the actual Compose service
+list (`docker compose config --services`) and fails fast if a *non*-
+`gate_only` mapped service is missing from it — without this check, a
+missing mapping fails the whole `docker compose up` call after every other
+service has already cleared the Pact gate, because Compose validates its
+positional service arguments before starting anything. It also warns (does
+not fail) if a `gate_only` service unexpectedly *does* exist in Compose —
+that usually means the mapping was never flipped back after the service
+moved into `compose.yaml`. See
+[ADR 0013](docs/adr/0013-gate-only-services.md).
+
 **`deploy.pull`.** c2quay does not build images and by default does not
 pull them either — the operator (or CI) is responsible for image
 freshness before `c2quay deploy` runs. Set `deploy.pull: always` to run

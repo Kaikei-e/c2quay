@@ -138,6 +138,30 @@ func (a *ShellAdapter) RenderConfigJSON(ctx context.Context) (*RenderedConfig, e
 	return rc, nil
 }
 
+// ConfigServices runs `docker compose config --services` and returns the
+// service names, one per non-blank output line. See ADR 0013.
+func (a *ShellAdapter) ConfigServices(ctx context.Context) ([]string, error) {
+	args := append(a.baseArgs(), "config", "--services")
+	stdout, stderr, err := a.exec.Output(ctx, "docker", args...)
+	if err != nil {
+		return nil, fmt.Errorf("docker compose config --services failed: %w: %s", err, strings.TrimSpace(string(stderr)))
+	}
+	return parseServiceList(stdout), nil
+}
+
+func parseServiceList(raw []byte) []string {
+	lines := strings.Split(string(raw), "\n")
+	out := make([]string, 0, len(lines))
+	for _, l := range lines {
+		l = strings.TrimSpace(l)
+		if l == "" {
+			continue
+		}
+		out = append(out, l)
+	}
+	return out
+}
+
 func (a *ShellAdapter) PsJSON(ctx context.Context) ([]ContainerStatus, error) {
 	args := append(a.baseArgs(), "ps", "--all", "--format", "json")
 	stdout, stderr, err := a.exec.Output(ctx, "docker", args...)

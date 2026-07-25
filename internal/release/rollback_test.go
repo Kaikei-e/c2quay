@@ -119,6 +119,30 @@ func TestBuildRollbackPlan(t *testing.T) {
 		assert.NotEmpty(t, reason)
 	})
 
+	// TestBuildRollbackPlan (gate_only case): a gate_only service is never
+	// captured in a snapshot's Images map in the first place — Images comes
+	// from `docker compose config`'s rendered services (see CaptureSnapshot
+	// / RenderConfigJSON.ImagesByService), and gate_only services are by
+	// definition absent from Compose. BuildRollbackPlan therefore needs no
+	// gate_only-specific logic: it naturally never proposes rolling back a
+	// service that was never running under Compose to begin with. This
+	// pins that invariant down as an explicit regression test. See
+	// ADR 0013.
+	t.Run("gate_only service absent from pre snapshot is never proposed for rollback", func(t *testing.T) {
+		pre := &release.Snapshot{
+			Env: "production",
+			// "tts-speaker" is mapped in c2quay.yml but gate_only: true, so
+			// it was never in the compose config and never made it into
+			// Images — exactly like "api" here, minus the entry.
+			Images: map[string]string{"api": "api:v1"},
+		}
+		current := map[string]string{"api": "api:v2"}
+		plan, ok, reason := release.BuildRollbackPlan(pre, current)
+		require.True(t, ok, "reason=%q", reason)
+		assert.Equal(t, []string{"api"}, plan.Services, "gate_only service must not appear in the rollback plan")
+		assert.NotContains(t, plan.Images, "tts-speaker")
+	})
+
 	t.Run("blank previous image skipped", func(t *testing.T) {
 		pre := &release.Snapshot{Images: map[string]string{"api": "", "web": "web:v1"}}
 		plan, ok, _ := release.BuildRollbackPlan(pre, nil)
@@ -186,6 +210,10 @@ func (f *rbFakeCompose) RenderConfigJSON(context.Context) (*composeadapter.Rende
 	}
 	return &composeadapter.RenderedConfig{Services: map[string]composeadapter.RenderedService{}}, nil
 }
+
+// ConfigServices is not exercised by rollback flows (plan-time coverage
+// validation is a deploy-only step); it satisfies release.ComposeDeployer.
+func (f *rbFakeCompose) ConfigServices(context.Context) ([]string, error) { return nil, nil }
 
 type rbSilentUI struct{ events []string }
 

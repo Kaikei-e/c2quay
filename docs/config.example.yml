@@ -45,3 +45,15 @@ environments:
         pacticipant: api
       web:
         pacticipant: web
+      # gate_only marks a mapped service that does NOT exist in this box's
+      # compose.yaml — e.g. it runs on a separate host (a remote GPU
+      # worker, a managed dependency you don't orchestrate with Compose
+      # here). It is still gated (can-i-deploy / aggregate matrix) and
+      # recorded to the broker like any other service, but c2quay never
+      # passes it to `docker compose up`, `pull`, or a rollback. Without
+      # this flag, a mapped service missing from compose.yaml fails the
+      # ENTIRE deploy at `docker compose up` time — after every other
+      # service has already cleared the Pact gate. See ADR 0013.
+      # tts-speaker:
+      #   pacticipant: tts-speaker
+      #   gate_only: true

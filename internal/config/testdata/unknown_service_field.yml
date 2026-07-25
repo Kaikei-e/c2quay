@@ -1,0 +1,20 @@
+compose:
+  files:
+    - compose.yaml
+  project_name: myapp
+
+broker:
+  base_url: https://pact-broker.example.com
+
+versioning:
+  strategy: manifest_file
+  options:
+    path: .c2quay/versions.json
+
+environments:
+  production:
+    all_or_nothing: true
+    services:
+      api:
+        pacticipant: api
+        gate_onl: true

@@ -70,6 +70,52 @@ func TestBuildPlan_UnknownEnvironment(t *testing.T) {
 	require.Error(t, err)
 }
 
+// --- gate_only / DeployServices ------------------------------------------
+// See ADR 0013: gate_only services are gated and recorded like any other
+// mapped service, but must never reach a docker compose operation.
+
+func cfgWithGateOnly() *config.Config {
+	return &config.Config{
+		Environments: map[string]config.Environment{
+			"production": {Services: map[string]config.ServiceMapping{
+				"api":         {Pacticipant: "api"},
+				"tts-speaker": {Pacticipant: "tts-speaker", GateOnly: true},
+			}},
+		},
+	}
+}
+
+func TestBuildPlan_DeployServices_ExcludesGateOnly(t *testing.T) {
+	s := &fakeStrategy{out: map[string]versioning.Release{
+		"api":         {Version: "v1"},
+		"tts-speaker": {Version: "v1"},
+	}}
+	plan, err := release.BuildPlan(context.Background(), cfgWithGateOnly(), "production", "", s)
+	require.NoError(t, err)
+
+	// Services (gate + record) keeps every mapped service, gate_only included.
+	assert.Equal(t, []string{"api", "tts-speaker"}, plan.Services)
+	// DeployServices excludes gate_only.
+	assert.Equal(t, []string{"api"}, plan.DeployServices)
+}
+
+func TestBuildPlan_DeployServices_BackwardCompatibleWithoutGateOnly(t *testing.T) {
+	s := &fakeStrategy{out: map[string]versioning.Release{
+		"api": {Version: "v1"}, "web": {Version: "v2"},
+	}}
+	plan, err := release.BuildPlan(context.Background(), cfgTwoServices(), "production", "", s)
+	require.NoError(t, err)
+	assert.Equal(t, plan.Services, plan.DeployServices, "no gate_only services present: DeployServices must equal Services")
+}
+
+func TestBuildPlan_DeployServices_SingleGateOnlyServiceYieldsEmptyDeployServices(t *testing.T) {
+	s := &fakeStrategy{out: map[string]versioning.Release{"tts-speaker": {Version: "v1"}}}
+	plan, err := release.BuildPlan(context.Background(), cfgWithGateOnly(), "production", "tts-speaker", s)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"tts-speaker"}, plan.Services)
+	assert.Empty(t, plan.DeployServices)
+}
+
 func TestGateAll_AllPass(t *testing.T) {
 	tr := true
 	client := &fakeBrokerClient{responses: map[string]*broker.CanIDeployResult{

@@ -29,6 +29,7 @@ func (s *stubAdapter) PsJSON(context.Context) ([]composeadapter.ContainerStatus,
 }
 func (s *stubAdapter) Pull(context.Context, []string, io.Writer) error               { return nil }
 func (s *stubAdapter) Up(context.Context, composeadapter.UpOptions, io.Writer) error { return nil }
+func (s *stubAdapter) ConfigServices(context.Context) ([]string, error)              { return nil, nil }
 
 var _ composeadapter.Adapter = (*stubAdapter)(nil)
 

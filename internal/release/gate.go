@@ -54,9 +54,16 @@ func CheckService(ctx context.Context, client GateChecker, svc, pacticipant, env
 // Plan is the resolved versions for every service being gated.
 type Plan struct {
 	Env      string
-	Services []string                         // order matters (output stability)
+	Services []string                         // gate + record targets; order matters (output stability)
 	Releases map[string]versioning.Release    // service -> release
 	Mapping  map[string]config.ServiceMapping // service -> pacticipant mapping
+
+	// DeployServices is the subset of Services that should actually reach
+	// docker compose (up, pull, force-recreate, snapshot/rollback). It
+	// excludes every service mapped with gate_only: true. For configs
+	// without gate_only, DeployServices always equals Services — this
+	// preserves pre-ADR-0013 behaviour byte-for-byte. See ADR 0013.
+	DeployServices []string
 
 	// AllOrNothing mirrors the environment's all_or_nothing setting. When
 	// true, GateAll routes the check through a single matrix query so the
@@ -88,15 +95,23 @@ func BuildPlan(ctx context.Context, cfg *config.Config, envName, onlyService str
 	}
 	sort.Strings(services)
 
+	deployServices := make([]string, 0, len(services))
+	for _, s := range services {
+		if !mapping[s].GateOnly {
+			deployServices = append(deployServices, s)
+		}
+	}
+
 	releases, err := strat.Resolve(ctx, services)
 	if err != nil {
 		return nil, err
 	}
 	return &Plan{
-		Env:          envName,
-		Services:     services,
-		Releases:     releases,
-		Mapping:      mapping,
-		AllOrNothing: env.AllOrNothing,
+		Env:            envName,
+		Services:       services,
+		DeployServices: deployServices,
+		Releases:       releases,
+		Mapping:        mapping,
+		AllOrNothing:   env.AllOrNothing,
 	}, nil
 }

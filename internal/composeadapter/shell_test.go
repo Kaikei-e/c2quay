@@ -185,6 +185,58 @@ func TestShellAdapter_Pull_EmptyServicesPullsAll(t *testing.T) {
 		fe.streamed[0])
 }
 
+// TestShellAdapter_ConfigServices proves ConfigServices shells out to
+// `docker compose config --services` and returns one entry per line. Used
+// by plan-time gate_only coverage validation. See ADR 0013.
+func TestShellAdapter_ConfigServices(t *testing.T) {
+	fe := &fakeExec{outputs: map[string]fakeResponse{
+		key("docker", []string{"compose", "-f", "compose.yaml", "-p", "app", "config", "--services"}): {
+			stdout: []byte("api\nworker\n"),
+		},
+	}}
+	a := composeadapter.NewShell(composeadapter.ShellOptions{
+		ComposeFiles: []string{"compose.yaml"},
+		ProjectName:  "app",
+		Exec:         fe,
+	})
+	svcs, err := a.ConfigServices(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, []string{"api", "worker"}, svcs)
+}
+
+func TestShellAdapter_ConfigServices_TrimsBlankLines(t *testing.T) {
+	fe := &fakeExec{outputs: map[string]fakeResponse{
+		key("docker", []string{"compose", "-f", "c.yml", "-p", "proj", "config", "--services"}): {
+			stdout: []byte("api\n\nworker\n\n"),
+		},
+	}}
+	a := composeadapter.NewShell(composeadapter.ShellOptions{
+		ComposeFiles: []string{"c.yml"},
+		ProjectName:  "proj",
+		Exec:         fe,
+	})
+	svcs, err := a.ConfigServices(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, []string{"api", "worker"}, svcs)
+}
+
+func TestShellAdapter_ConfigServices_WrapsErr(t *testing.T) {
+	fe := &fakeExec{outputs: map[string]fakeResponse{
+		key("docker", []string{"compose", "-f", "c.yml", "-p", "proj", "config", "--services"}): {
+			err:    errors.New("exit status 1"),
+			stderr: []byte("service \"x\" has neither an image nor a build context"),
+		},
+	}}
+	a := composeadapter.NewShell(composeadapter.ShellOptions{
+		ComposeFiles: []string{"c.yml"},
+		ProjectName:  "proj",
+		Exec:         fe,
+	})
+	_, err := a.ConfigServices(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "docker compose config --services failed")
+}
+
 func TestShellAdapter_Pull_WrapsErr(t *testing.T) {
 	fe := &fakeExec{streamedErr: errors.New("registry 403")}
 	a := composeadapter.NewShell(composeadapter.ShellOptions{
