@@ -50,7 +50,16 @@ func ValidateComposeCoverage(ctx context.Context, compose composeServiceLister, 
 		}
 		return fmt.Errorf("resolve compose service list: %w", err)
 	}
+	return checkComposeCoverage(actual, plan, ui)
+}
 
+// checkComposeCoverage holds the actual missing/misconfigured-gate_only
+// comparison, factored out of ValidateComposeCoverage so `c2quay verify`
+// (internal/release/verify.go) can run the identical check on a
+// best-effort basis without inheriting Deploy's hard-fail-outside-dry-run
+// behaviour on ConfigServices errors — see the "Verify parity" note on
+// ADR 0013.
+func checkComposeCoverage(actual []string, plan *Plan, ui UI) error {
 	actualSet := make(map[string]struct{}, len(actual))
 	for _, s := range actual {
 		actualSet[s] = struct{}{}

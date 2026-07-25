@@ -66,8 +66,24 @@ type RecordResult struct {
 	Pacticipant string
 	Version     string
 	Recorded    bool
-	Err         error
+	// Err is nil when Recorded is true. When Recorded is false, Err is
+	// either the broker's failure for an attempted call, or
+	// ErrRecordNotAttempted (wrapped) when the call was never issued at
+	// all — e.g. because ctx was already cancelled before this service's
+	// turn. Callers that need to tell these apart (rollback-hint rendering,
+	// in particular) should check errors.Is(r.Err, ErrRecordNotAttempted)
+	// rather than treating every unrecorded service as "attempted and
+	// failed".
+	Err error
 }
+
+// ErrRecordNotAttempted marks a RecordResult whose record-deployment call
+// was never issued in the first place, distinct from one that was issued
+// and failed. recordAllDeployments checks ctx.Err() before every iteration;
+// once the context is cancelled it stops POSTing to the broker and marks
+// every remaining service this way instead of looping through calls that
+// are doomed to fail. See M2 / the ctx-cancellation reliability fix.
+var ErrRecordNotAttempted = errors.New("record-deployment: not attempted (context cancelled before this service's turn)")
 
 // RecordDeploymentError is returned by Deploy when at least one service's
 // record-deployment call failed. Unlike the previous stop-at-first-error
@@ -117,11 +133,27 @@ func (e *RecordDeploymentError) Recorded() []string {
 	return out
 }
 
-// Unrecorded returns the services that were NOT recorded.
+// Unrecorded returns the services that were NOT recorded — this includes
+// both attempted-and-failed and not-attempted services. Use NotAttempted to
+// separate the two.
 func (e *RecordDeploymentError) Unrecorded() []string {
 	var out []string
 	for _, r := range e.Results {
 		if !r.Recorded {
+			out = append(out, r.Service)
+		}
+	}
+	return out
+}
+
+// NotAttempted returns the services whose record-deployment call was never
+// issued at all (ctx was already cancelled by the time their turn came up),
+// as distinct from a service whose call was issued and failed. See
+// ErrRecordNotAttempted.
+func (e *RecordDeploymentError) NotAttempted() []string {
+	var out []string
+	for _, r := range e.Results {
+		if !r.Recorded && errors.Is(r.Err, ErrRecordNotAttempted) {
 			out = append(out, r.Service)
 		}
 	}
@@ -329,11 +361,31 @@ func Deploy(ctx context.Context, cfg *config.Config, envName, onlyService string
 // recordAllDeployments POSTs record-deployment for every service in the
 // plan, unconditionally attempting all of them regardless of earlier
 // failures, and returns one RecordResult per service in plan order.
+//
+// Before each POST it checks ctx.Err(): once the context is cancelled (e.g.
+// operator Ctrl-C, or an upstream deadline), further broker calls are
+// doomed to fail anyway, so every remaining service is marked "not
+// attempted" (ErrRecordNotAttempted) instead of looping through failing
+// POSTs. This is distinct from "attempted and failed" — see RecordResult.
 func recordAllDeployments(ctx context.Context, deps DeployDeps, cfg *config.Config, envName string, plan *Plan) []RecordResult {
 	results := make([]RecordResult, 0, len(plan.Services))
 	for _, svc := range plan.Services {
 		mapping := cfg.Environments[envName].Services[svc]
 		rel := plan.Releases[svc]
+
+		if cerr := ctx.Err(); cerr != nil {
+			notAttemptedErr := fmt.Errorf("%w: %v", ErrRecordNotAttempted, cerr)
+			results = append(results, RecordResult{
+				Service:     svc,
+				Pacticipant: mapping.Pacticipant,
+				Version:     rel.Version,
+				Recorded:    false,
+				Err:         notAttemptedErr,
+			})
+			deps.UI.Warn("record-deployment: "+mapping.Pacticipant, "not attempted: cancelled ("+cerr.Error()+")")
+			continue
+		}
+
 		err := deps.Broker.RecordDeployment(ctx, broker.RecordDeploymentInput{
 			Pacticipant: mapping.Pacticipant,
 			Version:     rel.Version,

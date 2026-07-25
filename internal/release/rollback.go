@@ -113,6 +113,18 @@ type RollbackReport struct {
 	// the point of skip.
 	ImageCaptureFailed     bool   `json:"image_capture_failed,omitempty"`
 	ImageCaptureFailReason string `json:"image_capture_fail_reason,omitempty"`
+
+	// PostSnapshotImageCaptureFailed / PostSnapshotImageCaptureFailReason
+	// describe the *post-rollback* snapshot's own image-capture step, taken
+	// after `compose up` for the rollback has run (successfully or not).
+	// Distinct from ImageCaptureFailed above, which describes the pre-deploy
+	// snapshot the rollback plan was built from. A failure here does not
+	// block or undo the rollback — compose has already executed — but it
+	// does mean the audit trail's "where did we actually end up" record is
+	// incomplete, which per the no-silent-fallback rule must be surfaced via
+	// UI.Warn and logged, not just noted here.
+	PostSnapshotImageCaptureFailed     bool   `json:"post_snapshot_image_capture_failed,omitempty"`
+	PostSnapshotImageCaptureFailReason string `json:"post_snapshot_image_capture_fail_reason,omitempty"`
 }
 
 // BuildRollbackPlan compares pre-snapshot images against the currently-rendered
@@ -242,7 +254,7 @@ func ExecuteRollback(ctx context.Context, deps RollbackDeps, plan *RollbackPlan,
 		deps.UI.Fail("rollback", "compose up: "+upErr.Error())
 		log.Error("rollback compose up failed", slog.String("err", upErr.Error()))
 		// Still try to capture a snapshot so operators can see where we ended.
-		_ = capturePostRollback(ctx, deps, plan.Env, report)
+		capturePostRollback(ctx, deps, plan.Env, report, log)
 		if path, werr := writeRollbackReport(deps.SnapshotDir, report); werr == nil {
 			report.ReportFile = path
 		}
@@ -253,7 +265,7 @@ func ExecuteRollback(ctx context.Context, deps RollbackDeps, plan *RollbackPlan,
 	deps.UI.Ok("rollback", fmt.Sprintf("%d service(s) restored", len(plan.Services)))
 	log.Info("rollback compose up completed", slog.Int("services", len(plan.Services)))
 
-	_ = capturePostRollback(ctx, deps, plan.Env, report)
+	capturePostRollback(ctx, deps, plan.Env, report, log)
 	if path, werr := writeRollbackReport(deps.SnapshotDir, report); werr == nil {
 		report.ReportFile = path
 	} else {
@@ -262,17 +274,37 @@ func ExecuteRollback(ctx context.Context, deps RollbackDeps, plan *RollbackPlan,
 	return report, nil
 }
 
-func capturePostRollback(ctx context.Context, deps RollbackDeps, env string, report *RollbackReport) error {
+// capturePostRollback captures a post-rollback snapshot for the audit trail
+// and writes it to disk. Failure here — either the capture itself or the
+// write — is non-fatal to the rollback outcome (compose has already run by
+// the time this is called), but per the project's no-silent-fallback rule it
+// must never be swallowed: it is logged AND surfaced via UI.Warn, mirroring
+// warnOnImageCaptureFailure in deploy.go. A snapshot whose own image-capture
+// step failed (Snapshot.ImageCaptureFailed) is likewise surfaced and
+// recorded on the report via PostSnapshotImageCaptureFailed — distinct from
+// the pre-deploy snapshot's ImageCaptureFailed field.
+func capturePostRollback(ctx context.Context, deps RollbackDeps, env string, report *RollbackReport, log *slog.Logger) {
 	snap, err := CaptureSnapshot(ctx, deps.Compose, env, nil)
 	if err != nil {
-		return err
+		msg := fmt.Sprintf("post-rollback snapshot capture failed: %v", err)
+		deps.UI.Warn("rollback", msg)
+		log.Warn("post-rollback snapshot capture failed", slog.String("err", err.Error()))
+		return
+	}
+	if snap.ImageCaptureFailed {
+		report.PostSnapshotImageCaptureFailed = true
+		report.PostSnapshotImageCaptureFailReason = snap.ImageCaptureFailReason
+		deps.UI.Warn("rollback", "post-rollback image capture failed: "+snap.ImageCaptureFailReason)
+		log.Warn("post-rollback image capture failed", slog.String("reason", snap.ImageCaptureFailReason))
 	}
 	path, werr := snap.Write(deps.SnapshotDir, "rollback")
 	if werr != nil {
-		return werr
+		msg := fmt.Sprintf("post-rollback snapshot write failed: %v", werr)
+		deps.UI.Warn("rollback", msg)
+		log.Warn("post-rollback snapshot write failed", slog.String("err", werr.Error()))
+		return
 	}
 	report.PostSnapshotFile = path
-	return nil
 }
 
 func writeRollbackReport(snapshotDir string, report *RollbackReport) (string, error) {

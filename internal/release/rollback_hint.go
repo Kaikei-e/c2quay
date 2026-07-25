@@ -1,6 +1,7 @@
 package release
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -91,29 +92,44 @@ func (h RollbackHint) Write(w io.Writer) {
 }
 
 // writeRecordResultsSection prints exactly which services the broker now
-// believes are deployed and which still show their previous version, so an
-// operator recovering from a partial record-deployment failure doesn't have
-// to guess. See RecordDeploymentError.
+// believes are deployed, which were attempted but failed, and which were
+// never attempted at all (ctx cancelled before their turn), so an operator
+// recovering from a partial record-deployment failure doesn't have to
+// guess — and doesn't mistake "we never even tried" for "we tried and the
+// broker rejected it". See RecordDeploymentError and ErrRecordNotAttempted.
 func writeRecordResultsSection(w io.Writer, results []RecordResult) {
-	var recorded, unrecorded []RecordResult
+	var recorded, failed, notAttempted []RecordResult
 	for _, r := range results {
-		if r.Recorded {
+		switch {
+		case r.Recorded:
 			recorded = append(recorded, r)
-		} else {
-			unrecorded = append(unrecorded, r)
+		case errors.Is(r.Err, ErrRecordNotAttempted):
+			notAttempted = append(notAttempted, r)
+		default:
+			failed = append(failed, r)
 		}
 	}
-	fmt.Fprintln(w, "record-deployment results (partial failure — every service was attempted):")
+	if len(notAttempted) > 0 {
+		fmt.Fprintln(w, "record-deployment results (partial failure — not every service was attempted):")
+	} else {
+		fmt.Fprintln(w, "record-deployment results (partial failure — every service was attempted):")
+	}
 	if len(recorded) > 0 {
 		fmt.Fprintln(w, "  Recorded (broker now shows these as deployed — no action needed):")
 		for _, r := range recorded {
 			fmt.Fprintf(w, "    - %s (%s@%s)\n", r.Service, r.Pacticipant, r.Version)
 		}
 	}
-	if len(unrecorded) > 0 {
+	if len(failed) > 0 {
 		fmt.Fprintln(w, "  NOT recorded (broker still shows the previous version deployed):")
-		for _, r := range unrecorded {
+		for _, r := range failed {
 			fmt.Fprintf(w, "    - %s (%s@%s): %s\n", r.Service, r.Pacticipant, r.Version, errString(r.Err))
+		}
+	}
+	if len(notAttempted) > 0 {
+		fmt.Fprintln(w, "  NOT attempted (deploy was cancelled before this service's record-deployment call; broker still shows the previous version):")
+		for _, r := range notAttempted {
+			fmt.Fprintf(w, "    - %s (%s@%s)\n", r.Service, r.Pacticipant, r.Version)
 		}
 	}
 }

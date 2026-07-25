@@ -133,3 +133,50 @@ service that doesn't belong to this box.
   contract-gating scope stops at the Pact Broker; runtime health of
   services it doesn't orchestrate is out of scope, same as it always has
   been for anything outside Compose.
+
+## Verify parity (added 2026-07-25)
+
+When this ADR first landed, `ValidateComposeCoverage` was wired into
+`Deploy` only. `Verify` — the standalone `c2quay verify` command a consumer
+repo (Alt) documents as "check whether a deploy would be safe, without doing
+anything" — kept no notion of compose coverage at all. The result: a
+non-`gate_only` service missing from `compose.yaml` passed `c2quay verify`
+cleanly, and only failed at `c2quay deploy`'s hard `docker compose up`
+step — exactly the class of surprise this ADR exists to eliminate, just
+moved one command over. An operator trusting `verify` as a pre-flight check
+had no way to see it coming.
+
+Fix, in `internal/release/verify.go`:
+
+- `VerifyDeps` gained an **optional** `Compose` field (the same
+  `composeServiceLister` surface `ValidateComposeCoverage` already uses).
+  Existing callers that only set `Broker`/`Strategy` are unaffected —
+  backward-compatible construction, zero value skips the check exactly as
+  before.
+- `internal/cli/verify.go` now wires the same Compose shell adapter deploy
+  uses into `VerifyDeps.Compose`, so `c2quay verify` always attempts the
+  check in practice.
+- When `Compose` is set, `Verify` resolves the compose service list and
+  runs the same missing/misconfigured-`gate_only` comparison
+  `ValidateComposeCoverage` does (factored into a shared
+  `checkComposeCoverage` helper) — **best-effort**, not deploy's
+  hard-fail-outside-`--dry-run` behaviour:
+  - A genuine coverage mismatch (`VerifyReport.CoverageErr`) makes
+    `AllPassed()` false and `FirstError()` return it — `verify` fails the
+    same way a doomed `deploy` eventually would, with the same message.
+  - A failure to even resolve the compose service list (no docker on this
+    box, daemon down, etc.) is **not** a hard failure for `verify` — that
+    would make `verify` unusable from a broker-only box, which is a
+    supported use case documented in the README's "closest tool in spirit"
+    comparison. Instead it sets `VerifyReport.CoverageNotice` to
+    `"compose coverage not checked: <reason>"`, which the CLI prints as a
+    loud warning (text mode) or `compose_coverage_notice` (JSON mode) — a
+    deliberate, explicit degradation, never a silent skip. Gate checks
+    still run and still determine the verdict on their own.
+
+No changes were needed to `Deploy`'s own coverage check — it keeps its
+existing hard-fail-outside-`--dry-run` behaviour, since that's the flow
+where a hidden gap causes the most damage (the whole batch already cleared
+the Pact gate). `verify` and `deploy` now agree on the general shape of
+"would compose accept this", they just differ on how they handle the probe
+itself being unreachable, matching each command's own purpose.

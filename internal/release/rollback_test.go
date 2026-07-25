@@ -189,6 +189,7 @@ type rbFakeCompose struct {
 	upErr     error
 	upCalls   []composeadapter.UpOptions
 	ps        []composeadapter.ContainerStatus
+	psErr     error
 	renderCfg *composeadapter.RenderedConfig
 	renderErr error
 }
@@ -199,7 +200,7 @@ func (f *rbFakeCompose) Up(_ context.Context, opts composeadapter.UpOptions, _ i
 	return f.upErr
 }
 func (f *rbFakeCompose) PsJSON(context.Context) ([]composeadapter.ContainerStatus, error) {
-	return f.ps, nil
+	return f.ps, f.psErr
 }
 func (f *rbFakeCompose) RenderConfigJSON(context.Context) (*composeadapter.RenderedConfig, error) {
 	if f.renderErr != nil {
@@ -301,6 +302,86 @@ func TestExecuteRollback_UpFailureSurfacesError(t *testing.T) {
 	assert.False(t, report.Succeeded)
 	assert.Contains(t, report.Err, "kaboom")
 	assert.NotEmpty(t, report.OverrideFile, "override still written before compose up attempt")
+}
+
+// TestExecuteRollback_PostSnapshotCaptureFailure_WarnsLoudly proves the H1
+// fix: when capturePostRollback fails outright (e.g. `docker compose ps`
+// itself errors), that failure must not be silently discarded — it must be
+// logged AND surfaced via UI.Warn, mirroring warnOnImageCaptureFailure in
+// deploy.go. Before the fix, ExecuteRollback did `_ = capturePostRollback(...)`
+// and the operator had no way to learn the audit trail is incomplete.
+func TestExecuteRollback_PostSnapshotCaptureFailure_WarnsLoudly(t *testing.T) {
+	cp := &rbFakeCompose{psErr: errors.New("docker compose ps: daemon unreachable")}
+	deps := baseRollbackDeps(t, cp)
+	require.NoError(t, os.MkdirAll(deps.SnapshotDir, 0o750))
+
+	plan := &release.RollbackPlan{
+		Env:      "production",
+		Images:   map[string]string{"api": "api:v1"},
+		Services: []string{"api"},
+	}
+	report, err := release.ExecuteRollback(context.Background(), deps, plan, release.RollbackOn)
+	require.NoError(t, err)
+	require.NotNil(t, report)
+	assert.True(t, report.Succeeded, "compose up itself succeeded; only the post-capture failed")
+	assert.Empty(t, report.PostSnapshotFile, "no snapshot could be captured")
+
+	ui := deps.UI.(*rbSilentUI)
+	assert.True(t, eventsContain(ui.events, "warn:") && eventsContain(ui.events, "daemon unreachable"),
+		"post-rollback capture failure must be surfaced via UI.Warn, got events=%v", ui.events)
+}
+
+// TestExecuteRollback_PostSnapshotImageCaptureFailed_SurfacedOnReport proves
+// the second half of H1: when the post-rollback snapshot itself succeeds but
+// its *image* capture step failed (Snapshot.ImageCaptureFailed), that must
+// be (a) surfaced via UI.Warn and (b) recorded on the RollbackReport in a
+// field distinguishable from the pre-deploy ImageCaptureFailed flag.
+func TestExecuteRollback_PostSnapshotImageCaptureFailed_SurfacedOnReport(t *testing.T) {
+	cp := &rbFakeCompose{renderErr: errors.New("docker compose config: bad yaml")}
+	deps := baseRollbackDeps(t, cp)
+	require.NoError(t, os.MkdirAll(deps.SnapshotDir, 0o750))
+
+	plan := &release.RollbackPlan{
+		Env:      "production",
+		Images:   map[string]string{"api": "api:v1"},
+		Services: []string{"api"},
+	}
+	report, err := release.ExecuteRollback(context.Background(), deps, plan, release.RollbackOn)
+	require.NoError(t, err)
+	require.NotNil(t, report)
+	assert.True(t, report.Succeeded)
+	assert.True(t, report.PostSnapshotImageCaptureFailed)
+	assert.Contains(t, report.PostSnapshotImageCaptureFailReason, "bad yaml")
+	// The post-rollback snapshot itself is still written (ps succeeded), just
+	// with an empty Images map.
+	assert.NotEmpty(t, report.PostSnapshotFile)
+
+	ui := deps.UI.(*rbSilentUI)
+	assert.True(t, eventsContain(ui.events, "warn:") && eventsContain(ui.events, "bad yaml"),
+		"post-rollback image-capture failure must be surfaced via UI.Warn, got events=%v", ui.events)
+}
+
+// TestExecuteRollback_UpFailure_PostSnapshotCaptureFailure_WarnsLoudly proves
+// the same H1 loudness guarantee at the *other* capturePostRollback call
+// site — the one reached when `compose up` itself fails during rollback.
+func TestExecuteRollback_UpFailure_PostSnapshotCaptureFailure_WarnsLoudly(t *testing.T) {
+	cp := &rbFakeCompose{upErr: errors.New("kaboom"), psErr: errors.New("ps also broken")}
+	deps := baseRollbackDeps(t, cp)
+	require.NoError(t, os.MkdirAll(deps.SnapshotDir, 0o750))
+
+	plan := &release.RollbackPlan{
+		Env:      "production",
+		Images:   map[string]string{"api": "api:v1"},
+		Services: []string{"api"},
+	}
+	report, err := release.ExecuteRollback(context.Background(), deps, plan, release.RollbackOn)
+	require.Error(t, err)
+	require.NotNil(t, report)
+	assert.False(t, report.Succeeded)
+
+	ui := deps.UI.(*rbSilentUI)
+	assert.True(t, eventsContain(ui.events, "warn:") && eventsContain(ui.events, "ps also broken"),
+		"post-rollback capture failure must be surfaced even on the compose-up-failed path, got events=%v", ui.events)
 }
 
 func TestExecuteRollback_NilPlanErrors(t *testing.T) {

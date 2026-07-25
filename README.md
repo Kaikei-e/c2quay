@@ -100,6 +100,16 @@ c2quay verify --env production --service api
 c2quay verify --env production --output json
 ```
 
+`verify` also opportunistically checks compose coverage (ADR 0013): every
+mapped, non-`gate_only` service must exist in the resolved Compose config, or
+verify fails with the same actionable message `deploy` would eventually hit
+at `docker compose up`. This is best-effort — if the compose CLI itself
+can't be probed (no docker on this box, daemon down), verify prints
+`compose coverage not checked: <reason>` and falls back to gate-only checks
+instead of failing outright, so `verify` stays usable on a broker-only box.
+See [ADR 0013 — "Verify parity"](docs/adr/0013-gate-only-services.md) for
+details.
+
 ### `c2quay deploy`
 
 Run the gated deployment: verify → compose up → record.

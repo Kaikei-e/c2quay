@@ -784,6 +784,52 @@ func TestDeploy_RecordDeployment_AllFail_ItemizesAllAsUnrecorded(t *testing.T) {
 	assert.Len(t, report.RecordResults, 2)
 }
 
+// TestDeploy_RecordDeployment_CtxCancelledMidLoop_StopsIssuingCalls proves
+// the M2 fix: once the deploy's context is cancelled partway through
+// recordAllDeployments, the remaining services must NOT be POSTed to the
+// broker at all — they are marked "not attempted", not "attempted and
+// failed". Before the fix, recordAllDeployments kept looping through every
+// remaining service, issuing HTTP calls doomed to fail against a cancelled
+// context.
+func TestDeploy_RecordDeployment_CtxCancelledMidLoop_StopsIssuingCalls(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	bk := &fakeDeployBroker{
+		canIDeployFunc: func(_ context.Context, _ broker.CanIDeployInput) (*broker.CanIDeployResult, error) {
+			return &broker.CanIDeployResult{Deployable: true}, nil
+		},
+		recordDeploymentFunc: func(_ context.Context, _ broker.RecordDeploymentInput) error {
+			// Cancel after the first service's call lands, regardless of
+			// which service that is (plan.Services is sorted, so it's
+			// deterministically "api" first).
+			cancel()
+			return nil
+		},
+	}
+	cp := &fakeCompose{
+		ps:             []composeadapter.ContainerStatus{{Service: "api", State: "running", Health: "healthy"}, {Service: "web", State: "running", Health: "healthy"}},
+		configServices: []string{"api", "web"},
+	}
+	deps := twoServiceDeps(bk, cp)
+	deps.SnapshotDir = t.TempDir()
+
+	report, err := release.Deploy(ctx, twoServiceConfig(), "production", "", false, deps)
+	require.Error(t, err)
+	require.NotNil(t, report)
+	assert.Equal(t, release.StepRecord, report.FailedAtStep)
+
+	require.Len(t, bk.recordCalls, 1, "the broker must not be called again once ctx is cancelled")
+	require.Len(t, report.RecordResults, 2)
+
+	first, second := report.RecordResults[0], report.RecordResults[1]
+	assert.True(t, first.Recorded, "the service recorded before cancellation must still show as recorded")
+	assert.False(t, second.Recorded)
+	assert.ErrorIs(t, second.Err, release.ErrRecordNotAttempted,
+		"the never-called service must be distinguishable from an attempted-and-failed one")
+
+	var recErr *release.RecordDeploymentError
+	require.ErrorAs(t, err, &recErr)
+}
+
 func TestDeploy_MissingDeps_Errors(t *testing.T) {
 	_, err := release.Deploy(context.Background(), baseConfig(), "production", "", false, release.DeployDeps{})
 	require.Error(t, err)

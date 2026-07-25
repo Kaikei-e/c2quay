@@ -69,14 +69,25 @@ func TestE2E_Deploy_GateOnly_MissingService_FailsBeforeGate(t *testing.T) {
 	assert.NotContains(t, combined, "can-i-deploy", "the gate must never run when compose coverage validation fails")
 }
 
-// TestE2E_Deploy_GateOnly_ExcludedFromComposeUp exercises the success path:
-// a gate_only service ("tts-speaker") absent from compose.yaml does NOT
-// trip plan-time validation, and is still gated (can-i-deploy runs for it
-// too). This requires a reachable Docker daemon (the pipeline captures a
+// TestE2E_Deploy_GateOnly_DryRun_GatesRemoteService exercises the success
+// path: a gate_only service ("tts-speaker") absent from compose.yaml does
+// NOT trip plan-time validation, and is still gated (can-i-deploy runs for
+// it too). This requires a reachable Docker daemon (the pipeline captures a
 // pre-deploy snapshot via `docker compose ps` before --dry-run stops it),
 // so it is skipped when the daemon is unreachable rather than failing for
 // an unrelated, environment-specific reason.
-func TestE2E_Deploy_GateOnly_ExcludedFromComposeUp(t *testing.T) {
+//
+// Renamed from TestE2E_Deploy_GateOnly_ExcludedFromComposeUp (L1): this test
+// runs with --dry-run, which stops before `docker compose up` is ever
+// invoked, so it never actually exercised "excluded from compose up" — that
+// invariant is proven at the unit level by
+// TestDeploy_GateOnlyService_ExcludedFromComposeUp in
+// internal/release/deploy_test.go, which asserts on the real Up() call
+// arguments. What THIS test proves, and all it can prove given --dry-run, is
+// that a gate_only service is still gated (can-i-deploy runs) and does not
+// trip the plan-time compose coverage check that would otherwise fail the
+// deploy before the gate ever runs.
+func TestE2E_Deploy_GateOnly_DryRun_GatesRemoteService(t *testing.T) {
 	requireDockerDaemon(t)
 
 	bin := buildBinary(t)

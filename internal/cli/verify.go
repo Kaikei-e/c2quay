@@ -63,6 +63,12 @@ func runVerify(ctx context.Context, rt *runtimeCtx, onlyService string) error {
 	report, err := release.Verify(ctx, rt.cfg, rt.flags.envName, onlyService, release.VerifyDeps{
 		Broker:   bc,
 		Strategy: strat,
+		// Compose is wired so verify opportunistically runs the same
+		// coverage check deploy does (ADR 0013 "Verify parity"). This is
+		// best-effort: an unreachable compose CLI degrades to a printed
+		// notice (see release.VerifyReport.CoverageNotice) rather than
+		// failing verify outright, so it stays usable on broker-only boxes.
+		Compose: adapter,
 	})
 	if err != nil {
 		return &ExitError{Code: ExitOperatorError, Err: err}
@@ -89,6 +95,13 @@ func emitVerifyText(rt *runtimeCtx, r *release.VerifyReport) {
 	w := output.NewText(rt.stdout)
 	w.Step(fmt.Sprintf("Resolving versions for %s", r.Plan.Env), joinServices(r.Plan))
 	pass, fail := 0, 0
+	if r.CoverageNotice != "" {
+		w.Warn("compose-coverage", r.CoverageNotice)
+	}
+	if r.CoverageErr != nil {
+		w.Fail("compose-coverage", r.CoverageErr.Error())
+		fail++
+	}
 	for _, o := range r.Outcomes {
 		label := fmt.Sprintf("can-i-deploy: %s@%s → %s", o.Pacticipant, o.Release.Version, r.Plan.Env)
 		switch {
@@ -111,7 +124,15 @@ func emitVerifyText(rt *runtimeCtx, r *release.VerifyReport) {
 }
 
 func emitVerifyJSON(rt *runtimeCtx, r *release.VerifyReport) error {
-	report := output.Report{Env: r.Plan.Env, Command: "verify"}
+	report := output.Report{Env: r.Plan.Env, Command: "verify", ComposeCoverageNotice: r.CoverageNotice}
+	if r.CoverageErr != nil {
+		report.Results = append(report.Results, output.ServiceResult{
+			Service: "compose-coverage",
+			Verdict: "error",
+			Reason:  r.CoverageErr.Error(),
+		})
+		report.Summary.Fail++
+	}
 	for _, o := range r.Outcomes {
 		verdict := "pass"
 		reason := o.Reason
