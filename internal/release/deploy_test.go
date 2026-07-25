@@ -597,6 +597,193 @@ func TestDeploy_ComposeCoverage_ConfigServicesError_DryRun_SkipsValidation(t *te
 	assert.True(t, eventsContain(ui.events, "warn:"), "expected a warning that coverage validation was skipped")
 }
 
+// --- silent rollback degradation ------------------------------------------
+// See the fix for: pre-deploy image capture failing left the snapshot with
+// empty Images and a later auto-rollback silently skipped, with nothing but
+// a slog line to explain why. Both the failure and the resulting skip must
+// now be loud in Progress/UI output and recorded on the RollbackReport.
+
+// TestDeploy_PreSnapshotImageCaptureFails_WarnsLoudlyAndSkipsRollbackLoudly
+// proves both halves of the fix: (1) CaptureSnapshot's failure is surfaced
+// via UI.Warn at snapshot time, and (2) when compose-up then fails and
+// auto-rollback (default on) tries to run, the skip is itself loud — both
+// via UI.Warn and via explicit fields on the persisted RollbackReport.
+func TestDeploy_PreSnapshotImageCaptureFails_WarnsLoudlyAndSkipsRollbackLoudly(t *testing.T) {
+	bk := &fakeDeployBroker{
+		canIDeployFunc: func(_ context.Context, _ broker.CanIDeployInput) (*broker.CanIDeployResult, error) {
+			return &broker.CanIDeployResult{Deployable: true}, nil
+		},
+	}
+	cp := &fakeCompose{
+		upErr:     errors.New("compose boom"),
+		renderErr: errors.New("docker: config render failed"),
+	}
+	ui := &silentUI{}
+	deps := baseDeps(bk, cp)
+	deps.UI = ui
+	deps.SnapshotDir = t.TempDir()
+
+	report, err := release.Deploy(context.Background(), baseConfig(), "production", "", false, deps)
+	require.Error(t, err)
+	require.NotNil(t, report)
+	require.NotNil(t, report.Pre)
+	assert.True(t, report.Pre.ImageCaptureFailed)
+	assert.Contains(t, report.Pre.ImageCaptureFailReason, "docker: config render failed")
+
+	// (1) Loud warning at snapshot time.
+	assert.True(t, eventsContain(ui.events, "rollback will not be possible"),
+		"expected a loud pre-snapshot warning, got %v", ui.events)
+
+	// (2) Auto-rollback (default on) must be skipped, loudly, with the
+	// RollbackReport itself flagging the root cause — not just SkipReason
+	// free text.
+	require.NotNil(t, report.Rollback)
+	assert.True(t, report.Rollback.Skipped)
+	assert.True(t, report.Rollback.ImageCaptureFailed)
+	assert.Contains(t, report.Rollback.ImageCaptureFailReason, "docker: config render failed")
+	assert.True(t, eventsContain(ui.events, "rollback is not possible for this deploy"),
+		"expected a loud rollback-skip warning, got %v", ui.events)
+}
+
+// TestDeploy_RollbackSkipped_NoImageCaptureFailure_StillWarnsButNoFlag
+// proves the benign skip path (e.g. images already match, or no pre
+// snapshot at all) still warns via UI (loud, not slog-only) but does NOT
+// set RollbackReport.ImageCaptureFailed — that flag is reserved for the
+// "we genuinely could not capture rollback state" case.
+func TestDeploy_RollbackSkipped_NoImageCaptureFailure_StillWarnsButNoFlag(t *testing.T) {
+	bk := &fakeDeployBroker{
+		canIDeployFunc: func(_ context.Context, _ broker.CanIDeployInput) (*broker.CanIDeployResult, error) {
+			return &broker.CanIDeployResult{Deployable: true}, nil
+		},
+	}
+	// No renderCfg/renderErr set on fakeCompose → RenderConfigJSON returns
+	// an empty (but successful) RenderedConfig, so pre.Images is empty
+	// without any capture failure — a "fresh deploy" style skip.
+	cp := &fakeCompose{upErr: errors.New("compose boom")}
+	ui := &silentUI{}
+	deps := baseDeps(bk, cp)
+	deps.UI = ui
+	deps.SnapshotDir = t.TempDir()
+
+	report, err := release.Deploy(context.Background(), baseConfig(), "production", "", false, deps)
+	require.Error(t, err)
+	require.NotNil(t, report)
+	require.NotNil(t, report.Pre)
+	assert.False(t, report.Pre.ImageCaptureFailed)
+
+	require.NotNil(t, report.Rollback)
+	assert.True(t, report.Rollback.Skipped)
+	assert.False(t, report.Rollback.ImageCaptureFailed, "a benign empty-images skip must not be flagged as a capture failure")
+	assert.True(t, eventsContain(ui.events, "skipped"), "even a benign skip must be loud, not slog-only")
+}
+
+// --- record-deployment partial failure -----------------------------------
+
+func twoServiceConfig() *config.Config {
+	return &config.Config{
+		Broker: config.BrokerConfig{BaseURL: "http://broker"},
+		Environments: map[string]config.Environment{
+			"production": {Services: map[string]config.ServiceMapping{
+				"api": {Pacticipant: "api"},
+				"web": {Pacticipant: "web"},
+			}},
+		},
+	}
+}
+
+func twoServiceDeps(broker release.DeployBroker, compose release.ComposeDeployer) release.DeployDeps {
+	deps := baseDeps(broker, compose)
+	deps.Strategy = &fakeStrategy{out: map[string]versioning.Release{
+		"api": {Version: "v1"},
+		"web": {Version: "v2"},
+	}}
+	return deps
+}
+
+// TestDeploy_RecordDeployment_PartialFailure_AttemptsAllAndItemizes proves
+// the fix for the "stops at first error" defect: every service's
+// record-deployment call is attempted even after an earlier one fails, and
+// the returned error itemizes exactly which services were recorded and
+// which were not.
+func TestDeploy_RecordDeployment_PartialFailure_AttemptsAllAndItemizes(t *testing.T) {
+	bk := &fakeDeployBroker{
+		canIDeployFunc: func(_ context.Context, _ broker.CanIDeployInput) (*broker.CanIDeployResult, error) {
+			return &broker.CanIDeployResult{Deployable: true}, nil
+		},
+		recordDeploymentFunc: func(_ context.Context, in broker.RecordDeploymentInput) error {
+			if in.Pacticipant == "web" {
+				return errors.New("broker 503")
+			}
+			return nil
+		},
+	}
+	cp := &fakeCompose{
+		ps:             []composeadapter.ContainerStatus{{Service: "api", State: "running", Health: "healthy"}, {Service: "web", State: "running", Health: "healthy"}},
+		configServices: []string{"api", "web"},
+	}
+	deps := twoServiceDeps(bk, cp)
+	deps.SnapshotDir = t.TempDir()
+
+	report, err := release.Deploy(context.Background(), twoServiceConfig(), "production", "", false, deps)
+	require.Error(t, err)
+	require.NotNil(t, report)
+	assert.Equal(t, release.StepRecord, report.FailedAtStep)
+
+	// Both services must have been attempted, in order, regardless of the
+	// first one's outcome.
+	require.Len(t, bk.recordCalls, 2, "record-deployment MUST be attempted for every service, not just until the first failure")
+	pacticipants := []string{bk.recordCalls[0].Pacticipant, bk.recordCalls[1].Pacticipant}
+	assert.ElementsMatch(t, []string{"api", "web"}, pacticipants)
+
+	// The report itemizes the split.
+	require.Len(t, report.RecordResults, 2)
+	byService := map[string]release.RecordResult{}
+	for _, r := range report.RecordResults {
+		byService[r.Service] = r
+	}
+	assert.True(t, byService["api"].Recorded, "api should have been recorded successfully")
+	assert.False(t, byService["web"].Recorded, "web should be marked as not recorded")
+	assert.Error(t, byService["web"].Err)
+
+	// The returned error itemizes recorded vs. failed services.
+	var recErr *release.RecordDeploymentError
+	require.ErrorAs(t, err, &recErr)
+	assert.ElementsMatch(t, []string{"api"}, recErr.Recorded())
+	assert.ElementsMatch(t, []string{"web"}, recErr.Unrecorded())
+	assert.Contains(t, err.Error(), "api")
+	assert.Contains(t, err.Error(), "web")
+}
+
+// TestDeploy_RecordDeployment_AllFail_ItemizesAllAsUnrecorded is the
+// degenerate case: every service fails, so Recorded() is empty and
+// Unrecorded() lists everything.
+func TestDeploy_RecordDeployment_AllFail_ItemizesAllAsUnrecorded(t *testing.T) {
+	bk := &fakeDeployBroker{
+		canIDeployFunc: func(_ context.Context, _ broker.CanIDeployInput) (*broker.CanIDeployResult, error) {
+			return &broker.CanIDeployResult{Deployable: true}, nil
+		},
+		recordDeploymentFunc: func(_ context.Context, _ broker.RecordDeploymentInput) error {
+			return errors.New("broker unreachable")
+		},
+	}
+	cp := &fakeCompose{
+		ps:             []composeadapter.ContainerStatus{{Service: "api", State: "running", Health: "healthy"}, {Service: "web", State: "running", Health: "healthy"}},
+		configServices: []string{"api", "web"},
+	}
+	deps := twoServiceDeps(bk, cp)
+	deps.SnapshotDir = t.TempDir()
+
+	report, err := release.Deploy(context.Background(), twoServiceConfig(), "production", "", false, deps)
+	require.Error(t, err)
+	require.Len(t, bk.recordCalls, 2, "both services must still be attempted")
+
+	var recErr *release.RecordDeploymentError
+	require.ErrorAs(t, err, &recErr)
+	assert.Empty(t, recErr.Recorded())
+	assert.ElementsMatch(t, []string{"api", "web"}, recErr.Unrecorded())
+	assert.Len(t, report.RecordResults, 2)
+}
+
 func TestDeploy_MissingDeps_Errors(t *testing.T) {
 	_, err := release.Deploy(context.Background(), baseConfig(), "production", "", false, release.DeployDeps{})
 	require.Error(t, err)

@@ -101,6 +101,18 @@ type RollbackReport struct {
 	Duration         time.Duration `json:"duration"`
 	Err              string        `json:"error,omitempty"`
 	ReportFile       string        `json:"report_file,omitempty"`
+
+	// ImageCaptureFailed / ImageCaptureFailReason are copied from the
+	// pre-deploy Snapshot when a rollback is skipped because that snapshot
+	// couldn't capture images. Set only on a skipped report. Distinguishes
+	// "rollback is genuinely unnecessary" (e.g. images already match) from
+	// "rollback is IMPOSSIBLE because we don't know what to roll back to" —
+	// the latter is an operational gap an operator needs to notice, not a
+	// routine no-op. Per the no-silent-fallback rule this must not live
+	// only in SkipReason's free text; see also Progress output emitted at
+	// the point of skip.
+	ImageCaptureFailed     bool   `json:"image_capture_failed,omitempty"`
+	ImageCaptureFailReason string `json:"image_capture_fail_reason,omitempty"`
 }
 
 // BuildRollbackPlan compares pre-snapshot images against the currently-rendered

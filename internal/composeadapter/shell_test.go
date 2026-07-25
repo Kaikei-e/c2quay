@@ -7,6 +7,7 @@ import (
 	"io"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -25,6 +26,13 @@ type fakeExec struct {
 	outputs     map[string]fakeResponse
 	streamed    [][]string
 	streamedErr error
+
+	// outputsSeq lets a test script successive responses for the SAME
+	// command (e.g. two `ps` calls 2s apart returning different health).
+	// Each call to that key pops the next entry; calls past the end repeat
+	// the last entry. Falls back to outputs when the key isn't present here.
+	outputsSeq map[string][]fakeResponse
+	seqIdx     map[string]int
 }
 
 func key(name string, args []string) string {
@@ -33,10 +41,23 @@ func key(name string, args []string) string {
 
 func (f *fakeExec) Output(_ context.Context, name string, args ...string) ([]byte, []byte, error) {
 	f.calls = append(f.calls, append([]string{name}, args...))
-	if r, ok := f.outputs[key(name, args)]; ok {
+	k := key(name, args)
+	if seq, ok := f.outputsSeq[k]; ok && len(seq) > 0 {
+		if f.seqIdx == nil {
+			f.seqIdx = map[string]int{}
+		}
+		idx := f.seqIdx[k]
+		if idx >= len(seq) {
+			idx = len(seq) - 1
+		}
+		f.seqIdx[k] = idx + 1
+		r := seq[idx]
 		return r.stdout, r.stderr, r.err
 	}
-	return nil, nil, errors.New("unexpected: " + key(name, args))
+	if r, ok := f.outputs[k]; ok {
+		return r.stdout, r.stderr, r.err
+	}
+	return nil, nil, errors.New("unexpected: " + k)
 }
 
 func (f *fakeExec) RunWithStream(_ context.Context, w io.Writer, name string, args ...string) error {
@@ -93,6 +114,8 @@ func TestShellAdapter_Up_RunsExpectedCommand(t *testing.T) {
 
 func TestShellAdapter_Up_WaitFalsePositiveCompensated(t *testing.T) {
 	// docker/compose#10596: --wait exits 1 even though everything is up.
+	// Both health re-checks (2s apart in production, near-instant here) must
+	// see the same healthy state before the exit error is overridden.
 	fe := &fakeExec{
 		outputs: map[string]fakeResponse{
 			key("docker", []string{"compose", "-f", "c.yml", "-p", "proj", "ps", "--all", "--format", "json"}): {
@@ -101,13 +124,139 @@ func TestShellAdapter_Up_WaitFalsePositiveCompensated(t *testing.T) {
 		},
 		streamedErr: errors.New("exit status 1"),
 	}
+	var progress bytes.Buffer
+	a := composeadapter.NewShell(composeadapter.ShellOptions{
+		ComposeFiles:       []string{"c.yml"},
+		ProjectName:        "proj",
+		Exec:               fe,
+		HealthRecheckDelay: time.Millisecond,
+	})
+	err := a.Up(context.Background(), composeadapter.UpOptions{Wait: true}, &progress)
+	require.NoError(t, err, "false-positive exit 1 should be masked when both ps re-checks show healthy")
+	assert.Contains(t, progress.String(), "docker/compose#10596",
+		"operators must see in Progress output that the exit error was overridden")
+}
+
+// TestShellAdapter_Up_TransientHealthyBlipNotMasked proves the tightened
+// workaround: a FIRST ps check that looks healthy is not enough on its own.
+// If the SECOND check (2s later in production) shows things have gone
+// unhealthy, the original compose exit error must NOT be masked.
+func TestShellAdapter_Up_TransientHealthyBlipNotMasked(t *testing.T) {
+	psKey := key("docker", []string{"compose", "-f", "c.yml", "-p", "proj", "ps", "--all", "--format", "json"})
+	fe := &fakeExec{
+		outputsSeq: map[string][]fakeResponse{
+			psKey: {
+				{stdout: []byte(`[{"Service":"api","State":"running","Health":"healthy"}]`)},
+				{stdout: []byte(`[{"Service":"api","State":"exited","ExitCode":1}]`)},
+			},
+		},
+		streamedErr: errors.New("exit status 1"),
+	}
+	a := composeadapter.NewShell(composeadapter.ShellOptions{
+		ComposeFiles:       []string{"c.yml"},
+		ProjectName:        "proj",
+		Exec:               fe,
+		HealthRecheckDelay: time.Millisecond,
+	})
+	err := a.Up(context.Background(), composeadapter.UpOptions{Wait: true}, io.Discard)
+	require.Error(t, err, "a transient healthy blip that regresses on re-check must not be masked")
+	assert.Contains(t, err.Error(), "exit status 1")
+
+	psCalls := 0
+	for _, c := range fe.calls {
+		if len(c) > 0 && key(c[0], c[1:]) == psKey {
+			psCalls++
+		}
+	}
+	assert.Equal(t, 2, psCalls, "both health re-checks must have run")
+}
+
+// TestShellAdapter_Up_FirstCheckUnhealthy_SkipsSecondCheck proves we don't
+// waste the recheck delay when the first check already shows unhealthy —
+// the original error surfaces immediately.
+func TestShellAdapter_Up_FirstCheckUnhealthy_SkipsSecondCheck(t *testing.T) {
+	fe := &fakeExec{
+		outputs: map[string]fakeResponse{
+			key("docker", []string{"compose", "-f", "c.yml", "-p", "proj", "ps", "--all", "--format", "json"}): {
+				stdout: []byte(`[{"Service":"api","State":"exited","ExitCode":1}]`),
+			},
+		},
+		streamedErr: errors.New("exit status 1"),
+	}
 	a := composeadapter.NewShell(composeadapter.ShellOptions{
 		ComposeFiles: []string{"c.yml"},
 		ProjectName:  "proj",
 		Exec:         fe,
+		// Deliberately large: if the adapter incorrectly performed a second
+		// check here, this test would time out the whole suite.
+		HealthRecheckDelay: time.Hour,
+	})
+	start := time.Now()
+	err := a.Up(context.Background(), composeadapter.UpOptions{Wait: true}, io.Discard)
+	require.Error(t, err)
+	assert.Less(t, time.Since(start), 5*time.Second, "must not sleep the recheck delay when the first check already fails")
+}
+
+// TestShellAdapter_Up_SecondPsCheckErrors proves the second ps call failing
+// outright (not just showing unhealthy) is surfaced as an error too, not
+// silently treated as a pass.
+func TestShellAdapter_Up_SecondPsCheckErrors(t *testing.T) {
+	psKey := key("docker", []string{"compose", "-f", "c.yml", "-p", "proj", "ps", "--all", "--format", "json"})
+	fe := &fakeExec{
+		outputsSeq: map[string][]fakeResponse{
+			psKey: {
+				{stdout: []byte(`[{"Service":"api","State":"running","Health":"healthy"}]`)},
+				{err: errors.New("docker daemon unreachable")},
+			},
+		},
+		streamedErr: errors.New("exit status 1"),
+	}
+	a := composeadapter.NewShell(composeadapter.ShellOptions{
+		ComposeFiles:       []string{"c.yml"},
+		ProjectName:        "proj",
+		Exec:               fe,
+		HealthRecheckDelay: time.Millisecond,
 	})
 	err := a.Up(context.Background(), composeadapter.UpOptions{Wait: true}, io.Discard)
-	require.NoError(t, err, "false-positive exit 1 should be masked when ps shows healthy")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "exit status 1")
+	assert.Contains(t, err.Error(), "docker daemon unreachable")
+}
+
+// TestShellAdapter_Up_ContextCancelledDuringRecheck_DoesNotMask proves that
+// if the context expires while waiting between the two health checks, the
+// original compose error is returned rather than silently proceeding to a
+// second check (or worse, treating the cancellation as success).
+func TestShellAdapter_Up_ContextCancelledDuringRecheck_DoesNotMask(t *testing.T) {
+	fe := &fakeExec{
+		outputs: map[string]fakeResponse{
+			key("docker", []string{"compose", "-f", "c.yml", "-p", "proj", "ps", "--all", "--format", "json"}): {
+				stdout: []byte(`[{"Service":"api","State":"running","Health":"healthy"}]`),
+			},
+		},
+		streamedErr: errors.New("exit status 1"),
+	}
+	a := composeadapter.NewShell(composeadapter.ShellOptions{
+		ComposeFiles:       []string{"c.yml"},
+		ProjectName:        "proj",
+		Exec:               fe,
+		HealthRecheckDelay: 200 * time.Millisecond,
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+
+	err := a.Up(ctx, composeadapter.UpOptions{Wait: true}, io.Discard)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "exit status 1", "original compose error must not be masked by ctx cancellation")
+
+	psKey := key("docker", []string{"compose", "-f", "c.yml", "-p", "proj", "ps", "--all", "--format", "json"})
+	psCalls := 0
+	for _, c := range fe.calls {
+		if len(c) > 0 && key(c[0], c[1:]) == psKey {
+			psCalls++
+		}
+	}
+	assert.Equal(t, 1, psCalls, "only the first health check should run before ctx expires")
 }
 
 func TestShellAdapter_Up_RealFailureNotMasked(t *testing.T) {

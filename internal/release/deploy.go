@@ -50,8 +50,82 @@ type DeployReport struct {
 	FailedAtStep     FailedStep
 	FailedCause      error
 	Rollback         *RollbackReport
-	StartedAt        time.Time
-	FinishedAt       time.Time
+	// RecordResults itemizes the outcome of the record-deployment step,
+	// one entry per plan.Services entry, in plan order. Populated whenever
+	// step (5) runs at all — even on partial failure, so callers can tell
+	// exactly which services the broker now believes are deployed and which
+	// still show the previous version. See RecordDeploymentError.
+	RecordResults []RecordResult
+	StartedAt     time.Time
+	FinishedAt    time.Time
+}
+
+// RecordResult is the per-service outcome of a record-deployment POST.
+type RecordResult struct {
+	Service     string
+	Pacticipant string
+	Version     string
+	Recorded    bool
+	Err         error
+}
+
+// RecordDeploymentError is returned by Deploy when at least one service's
+// record-deployment call failed. Unlike the previous stop-at-first-error
+// behaviour, every service in the plan is always attempted first — this
+// error itemizes exactly which services were recorded (the broker's view is
+// now correct for them) and which were not (the broker still shows their
+// previous version), so an operator doesn't have to guess or re-derive that
+// split from logs before deciding how to recover.
+type RecordDeploymentError struct {
+	Results []RecordResult
+}
+
+func (e *RecordDeploymentError) Error() string {
+	var recorded, failed []string
+	for _, r := range e.Results {
+		if r.Recorded {
+			recorded = append(recorded, r.Service)
+		} else {
+			failed = append(failed, fmt.Sprintf("%s: %v", r.Service, r.Err))
+		}
+	}
+	return fmt.Sprintf("record-deployment: %d/%d services recorded successfully; recorded=%v failed=%v",
+		len(recorded), len(e.Results), recorded, failed)
+}
+
+// Unwrap exposes every per-service failure so errors.Is/As can still match
+// through this aggregate (e.g. broker.ErrUnexpectedStatus from one of the
+// failed calls).
+func (e *RecordDeploymentError) Unwrap() []error {
+	errs := make([]error, 0, len(e.Results))
+	for _, r := range e.Results {
+		if r.Err != nil {
+			errs = append(errs, r.Err)
+		}
+	}
+	return errs
+}
+
+// Recorded returns the services that were successfully recorded.
+func (e *RecordDeploymentError) Recorded() []string {
+	var out []string
+	for _, r := range e.Results {
+		if r.Recorded {
+			out = append(out, r.Service)
+		}
+	}
+	return out
+}
+
+// Unrecorded returns the services that were NOT recorded.
+func (e *RecordDeploymentError) Unrecorded() []string {
+	var out []string
+	for _, r := range e.Results {
+		if !r.Recorded {
+			out = append(out, r.Service)
+		}
+	}
+	return out
 }
 
 // Deploy runs the full lock-held pipeline. The caller MUST hold an
@@ -105,6 +179,7 @@ func Deploy(ctx context.Context, cfg *config.Config, envName, onlyService string
 	report.PreSnapshotFile = preFile
 	deps.UI.Ok("pre-snapshot", preFile)
 	log.Info("step completed", slog.String("step", "pre-snapshot"), slog.String("file", preFile))
+	warnOnImageCaptureFailure(deps, log, "pre-snapshot", pre)
 
 	// (2) gate
 	gateStart := time.Now()
@@ -188,6 +263,7 @@ func Deploy(ctx context.Context, cfg *config.Config, envName, onlyService string
 		if upErr != nil {
 			deps.UI.Fail("compose up", upErr.Error())
 			report.Post, _ = CaptureSnapshot(ctx, deps.Compose, envName, plan.Releases)
+			warnOnImageCaptureFailure(deps, log, "post-snapshot", report.Post)
 			maybeRollback(ctx, deps, cfg, report, StepComposeUp)
 			return failReport(report, StepComposeUp, upErr)
 		}
@@ -205,6 +281,7 @@ func Deploy(ctx context.Context, cfg *config.Config, envName, onlyService string
 		if err := RunSmoke(ctx, cfg.Deploy.Smoke, envName, deps.Progress); err != nil {
 			deps.UI.Fail("smoke", err.Error())
 			report.Post, _ = CaptureSnapshot(ctx, deps.Compose, envName, plan.Releases)
+			warnOnImageCaptureFailure(deps, log, "post-snapshot", report.Post)
 			maybeRollback(ctx, deps, cfg, report, StepSmoke)
 			return failReport(report, StepSmoke, err)
 		}
@@ -212,19 +289,19 @@ func Deploy(ctx context.Context, cfg *config.Config, envName, onlyService string
 	}
 
 	// (5) record-deployment — per ADR 0004, always last.
+	//
+	// Every service in the plan is attempted, even after an earlier one
+	// fails: stopping at the first error would leave the broker holding a
+	// mix of "recorded" and "not recorded" services with no record of which
+	// is which, which is exactly the inconsistency this itemization exists
+	// to prevent. See RecordDeploymentError.
 	recordStart := time.Now()
-	for _, svc := range plan.Services {
-		mapping := cfg.Environments[envName].Services[svc]
-		rel := plan.Releases[svc]
-		if err := deps.Broker.RecordDeployment(ctx, broker.RecordDeploymentInput{
-			Pacticipant: mapping.Pacticipant,
-			Version:     rel.Version,
-			Environment: envName,
-		}); err != nil {
-			deps.UI.Fail("record-deployment: "+mapping.Pacticipant, err.Error())
-			report.Post, _ = CaptureSnapshot(ctx, deps.Compose, envName, plan.Releases)
-			return failReport(report, StepRecord, err)
-		}
+	results := recordAllDeployments(ctx, deps, cfg, envName, plan)
+	report.RecordResults = results
+	if recErr := recordDeploymentError(results); recErr != nil {
+		deps.UI.Fail("record-deployment", recErr.Error())
+		report.Post, _ = CaptureSnapshot(ctx, deps.Compose, envName, plan.Releases)
+		return failReport(report, StepRecord, recErr)
 	}
 	deps.UI.Ok("record-deployment", fmt.Sprintf("%d recorded in %s", len(plan.Services), time.Since(recordStart).Round(time.Millisecond)))
 
@@ -234,6 +311,7 @@ func Deploy(ctx context.Context, cfg *config.Config, envName, onlyService string
 		log.Warn("post-snapshot failed (deploy itself succeeded)", slog.String("err", err.Error()))
 	} else {
 		report.Post = post
+		warnOnImageCaptureFailure(deps, log, "post-snapshot", post)
 		if pf, werr := post.Write(deps.SnapshotDir, "post"); werr != nil {
 			log.Warn("post-snapshot write failed", slog.String("err", werr.Error()))
 		} else {
@@ -246,6 +324,46 @@ func Deploy(ctx context.Context, cfg *config.Config, envName, onlyService string
 		slog.Int("services", len(plan.Services)),
 	)
 	return report, nil
+}
+
+// recordAllDeployments POSTs record-deployment for every service in the
+// plan, unconditionally attempting all of them regardless of earlier
+// failures, and returns one RecordResult per service in plan order.
+func recordAllDeployments(ctx context.Context, deps DeployDeps, cfg *config.Config, envName string, plan *Plan) []RecordResult {
+	results := make([]RecordResult, 0, len(plan.Services))
+	for _, svc := range plan.Services {
+		mapping := cfg.Environments[envName].Services[svc]
+		rel := plan.Releases[svc]
+		err := deps.Broker.RecordDeployment(ctx, broker.RecordDeploymentInput{
+			Pacticipant: mapping.Pacticipant,
+			Version:     rel.Version,
+			Environment: envName,
+		})
+		results = append(results, RecordResult{
+			Service:     svc,
+			Pacticipant: mapping.Pacticipant,
+			Version:     rel.Version,
+			Recorded:    err == nil,
+			Err:         err,
+		})
+		if err != nil {
+			deps.UI.Fail("record-deployment: "+mapping.Pacticipant, err.Error())
+		} else {
+			deps.UI.Ok("record-deployment: "+mapping.Pacticipant, rel.Version)
+		}
+	}
+	return results
+}
+
+// recordDeploymentError returns nil when every result recorded
+// successfully, or a *RecordDeploymentError itemizing the split otherwise.
+func recordDeploymentError(results []RecordResult) error {
+	for _, r := range results {
+		if !r.Recorded {
+			return &RecordDeploymentError{Results: results}
+		}
+	}
+	return nil
 }
 
 // ComposeFilesHelper makes "snapshot dir with env name in it" conveniently.
@@ -282,6 +400,24 @@ func failReport(r *DeployReport, step FailedStep, cause error) (*DeployReport, e
 	return r, cause
 }
 
+// warnOnImageCaptureFailure surfaces a snapshot's image-capture failure
+// loudly — both to the operator-visible UI (which routes to Progress/stdout
+// depending on the caller) and to the audit log — instead of letting it sit
+// silently until a later auto-rollback quietly no-ops. Per the project's
+// no-silent-fallback rule, "rollback will not be possible" must never be a
+// slog-only fact.
+func warnOnImageCaptureFailure(deps DeployDeps, log *slog.Logger, label string, snap *Snapshot) {
+	if snap == nil || !snap.ImageCaptureFailed {
+		return
+	}
+	msg := fmt.Sprintf("rollback will not be possible for this deploy: %s", snap.ImageCaptureFailReason)
+	deps.UI.Warn(label, msg)
+	log.Warn("image capture failed during snapshot; rollback will be unavailable",
+		slog.String("snapshot", label),
+		slog.String("reason", snap.ImageCaptureFailReason),
+	)
+}
+
 // maybeRollback runs the auto-rollback flow when policy allows and the mode
 // is not Off. Outcome (success, failure, skipped) is recorded on
 // report.Rollback; errors never shadow the original deploy failure.
@@ -294,10 +430,12 @@ func maybeRollback(parent context.Context, deps DeployDeps, cfg *config.Config, 
 		return
 	}
 	if report.Pre == nil {
+		reason := "no pre-deploy snapshot available"
+		deps.UI.Warn("rollback", "skipped: "+reason)
 		report.Rollback = &RollbackReport{
 			Mode:       mode,
 			Skipped:    true,
-			SkipReason: "no pre-deploy snapshot available",
+			SkipReason: reason,
 			StartedAt:  time.Now(),
 			FinishedAt: time.Now(),
 		}
@@ -309,13 +447,25 @@ func maybeRollback(parent context.Context, deps DeployDeps, cfg *config.Config, 
 	}
 	plan, ok, reason := BuildRollbackPlan(report.Pre, currentImages)
 	if !ok {
-		report.Rollback = &RollbackReport{
+		// Loud on skip: printed to the operator-visible UI (not just slog),
+		// and — when the root cause is a failed image capture rather than a
+		// benign "already up to date" — flagged explicitly in the persisted
+		// RollbackReport so it's visible without cross-referencing the
+		// pre-deploy snapshot file.
+		deps.UI.Warn("rollback", "skipped: "+reason)
+		rep := &RollbackReport{
 			Mode:       mode,
 			Skipped:    true,
 			SkipReason: reason,
 			StartedAt:  time.Now(),
 			FinishedAt: time.Now(),
 		}
+		if report.Pre.ImageCaptureFailed {
+			rep.ImageCaptureFailed = true
+			rep.ImageCaptureFailReason = report.Pre.ImageCaptureFailReason
+			deps.UI.Warn("rollback", "rollback is not possible for this deploy — pre-deploy image capture failed: "+report.Pre.ImageCaptureFailReason)
+		}
+		report.Rollback = rep
 		return
 	}
 	plan.FromSnapshotFile = report.PreSnapshotFile

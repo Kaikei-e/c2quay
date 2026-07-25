@@ -76,6 +76,20 @@ The closest tool in spirit is **Kamal**, and the difference is worth being expli
 
 These commands define the intended surface. Implementation is in progress; see the roadmap below.
 
+### `c2quay init`
+
+Scaffold a starter `c2quay.yml` in the current directory.
+
+```bash
+c2quay init            # refuses if c2quay.yml already exists
+c2quay init --force    # overwrite an existing c2quay.yml
+```
+
+The generated file is a trimmed, commented starting point — edit
+`broker.base_url` and `environments.<env>.services` for your project. See
+[`docs/config.example.yml`](docs/config.example.yml) for every option with
+full explanations.
+
 ### `c2quay verify`
 
 Check whether a deploy *would* be safe, without doing anything.
@@ -107,6 +121,31 @@ view of the previous version stays correct. Rollback is intentionally **not**
 triggered when `record-deployment` itself fails — compose has already
 succeeded at that point, and which side to reconcile (re-post to the broker
 vs. roll compose back by hand) is an operator decision.
+
+If `record-deployment` fails partway through a multi-service deploy, c2quay
+attempts every service's call regardless of earlier failures and reports
+exactly which ones the broker recorded and which it didn't, in both the
+error and the printed rollback hint — no guessing which services are safe
+to leave alone on retry.
+
+If the pre-deploy snapshot can't capture image state (`docker compose
+config --format json` fails), c2quay says so loudly at snapshot time — not
+just in the audit log — because it means **auto-rollback will not be
+possible** for that deploy. If a later failure would otherwise trigger
+auto-rollback, the skip itself is loud too: printed to the operator-visible
+output and flagged explicitly on the rollback report and hint, so it reads
+as "rollback was impossible" rather than a routine "nothing to roll back."
+
+**The `--wait` false-positive workaround (docker/compose#10596).** Some
+Compose versions return a non-zero exit from `up --wait` even when every
+service ends up healthy. c2quay compensates, but conservatively: on a
+non-zero exit it re-checks `docker compose ps` **twice**, 2 seconds apart,
+and only treats the deploy as successful if **both** checks show every
+service healthy. A single healthy snapshot is not enough — that protects
+against a transient healthy blip or a container that crashes moments later
+being reported as a successful deploy. Whenever this override fires, it's
+logged at `Warn` (with the original exit error) and also written to the
+deploy's Progress output, so it's visible without digging into logs.
 
 ### `c2quay rollback`
 
@@ -186,6 +225,21 @@ for the background incident.
 
 A worked example lives in [`docs/config.example.yml`](docs/config.example.yml).
 
+**Broker request retries.** Every request the Pact Broker client makes
+(index fetch, `can-i-deploy`, the `all_or_nothing` matrix, and
+`record-deployment`) is retried up to 3 attempts total with exponential
+backoff (500ms base, doubling, with jitter) when it fails transiently:
+network errors, HTTP `429`, or any `5xx`. Any other `4xx` is not retried —
+that's a request problem, not a broker problem, and repeating it wastes
+time before you see the real error. `record-deployment` is included in the
+retry set even though it's a POST: recording the same
+`(pacticipant, version, environment)` twice is a documented no-op on the
+broker side, so retrying it after a transient failure is safe. Context
+cancellation (e.g. `Ctrl-C`, or a caller-supplied deadline) is honored
+between attempts — a cancelled deploy does not sit through a retry backoff.
+See [ADR 0014](docs/adr/0014-broker-client-retry-policy.md) for the full
+rationale.
+
 **`gate_only`.** Set `gate_only: true` on a service mapping when that
 service is not declared in this box's `compose.yaml` — typically because it
 runs on a separate host (a remote GPU worker, a managed dependency you
@@ -244,6 +298,8 @@ The split is deliberate: Compose owns *what the service is*, c2quay owns *how th
 - [x] Smoke check hook
 - [ ] `deploy` over SSH
 - [x] Automatic rollback execution (opt-out via `--auto-rollback=off`)
+- [x] `init` command (scaffold a starter `c2quay.yml`)
+- [x] Bounded retry with backoff on Pact Broker requests (ADR 0014)
 
 > **Upgrading from v0.3:** auto-rollback is on by default. If your workflow
 > relied on the old "fix and retry" behaviour (compose left in the failed

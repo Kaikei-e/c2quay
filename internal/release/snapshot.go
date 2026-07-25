@@ -31,8 +31,21 @@ type Snapshot struct {
 	// Images maps service name → resolved image reference at capture time.
 	// Populated from `docker compose config --format json`. May be empty if
 	// the render call fails; callers treat empty Images as "rollback not
-	// possible from this snapshot".
+	// possible from this snapshot". See ImageCaptureFailed for *why* it's
+	// empty — a fresh deploy with genuinely nothing running yet is not the
+	// same situation as "the render call errored out."
 	Images map[string]string `json:"images,omitempty"`
+
+	// ImageCaptureFailed is true when `docker compose config --format json`
+	// itself returned an error during this snapshot's capture, leaving
+	// Images empty (or incomplete). Per the project's no-silent-fallback
+	// rule, this must never be a quiet, log-only condition: a snapshot with
+	// this set means auto-rollback WILL NOT be possible for the deploy this
+	// snapshot belongs to, and callers must surface that loudly (Progress
+	// output / RollbackReport), not just via slog.
+	ImageCaptureFailed bool `json:"image_capture_failed,omitempty"`
+	// ImageCaptureFailReason explains why, when ImageCaptureFailed is true.
+	ImageCaptureFailReason string `json:"image_capture_fail_reason,omitempty"`
 }
 
 func CaptureSnapshot(ctx context.Context, adapter snapshotSource, env string, releases map[string]versioning.Release) (*Snapshot, error) {
@@ -46,9 +59,16 @@ func CaptureSnapshot(ctx context.Context, adapter snapshotSource, env string, re
 		Releases:   releases,
 		Containers: cs,
 	}
-	// Image capture is best-effort: a failure here must not sink the whole
-	// deploy. The rollback flow later inspects Images and skips if empty.
-	if rc, rerr := adapter.RenderConfigJSON(ctx); rerr == nil && rc != nil {
+	// Image capture failure must not sink the whole deploy — CaptureSnapshot
+	// still returns a usable snapshot for the ps/diff parts of its job. But
+	// it must not be silent either: record exactly why, so callers (the
+	// deploy pipeline, in particular) can warn loudly instead of letting a
+	// later auto-rollback skip disappear into slog only.
+	rc, rerr := adapter.RenderConfigJSON(ctx)
+	if rerr != nil {
+		snap.ImageCaptureFailed = true
+		snap.ImageCaptureFailReason = fmt.Sprintf("docker compose config --format json failed: %v", rerr)
+	} else if rc != nil {
 		snap.Images = rc.ImagesByService()
 	}
 	return snap, nil

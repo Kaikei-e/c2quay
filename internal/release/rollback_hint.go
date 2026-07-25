@@ -25,6 +25,12 @@ type RollbackHint struct {
 	PreSnapshotFile string
 	PostSnapshot    *Snapshot
 	Rollback        *RollbackReport
+	// RecordResults itemizes the per-service record-deployment outcome.
+	// Only meaningful (and only populated by callers) when FailedAt ==
+	// StepRecord: it lets Write() replace the old blanket "record-deployment
+	// was NOT called" note — which is factually wrong once some services
+	// succeeded — with an accurate recorded/unrecorded split.
+	RecordResults []RecordResult
 }
 
 // Write emits the human-readable hint to w.
@@ -64,13 +70,59 @@ func (h RollbackHint) Write(w io.Writer) {
 	}
 
 	fmt.Fprintln(w, "")
-	fmt.Fprintln(w, "Note: record-deployment was NOT called for the failed attempt.")
-	if h.Rollback != nil && h.Rollback.Succeeded && h.Rollback.Mode != RollbackDryRun {
+	recordFailed := h.FailedAt == StepRecord && len(h.RecordResults) > 0
+	if recordFailed {
+		writeRecordResultsSection(w, h.RecordResults)
+	} else {
+		fmt.Fprintln(w, "Note: record-deployment was NOT called for the failed attempt.")
+	}
+
+	switch {
+	case h.Rollback != nil && h.Rollback.Succeeded && h.Rollback.Mode != RollbackDryRun:
 		fmt.Fprintln(w, "Services were restored to their pre-deploy images. The broker's")
 		fmt.Fprintln(w, "view of the previous version is still correct — no broker action needed.")
-	} else {
+	case recordFailed:
+		fmt.Fprintln(w, "Fix the cause above, then re-run `c2quay deploy`. Already-recorded services")
+		fmt.Fprintln(w, "are safe to record again — record-deployment is a no-op for a version that is")
+		fmt.Fprintln(w, "already marked deployed to this environment.")
+	default:
 		fmt.Fprintln(w, "The broker still records the previous version(s). Fix or revert, then re-run `c2quay deploy`.")
 	}
+}
+
+// writeRecordResultsSection prints exactly which services the broker now
+// believes are deployed and which still show their previous version, so an
+// operator recovering from a partial record-deployment failure doesn't have
+// to guess. See RecordDeploymentError.
+func writeRecordResultsSection(w io.Writer, results []RecordResult) {
+	var recorded, unrecorded []RecordResult
+	for _, r := range results {
+		if r.Recorded {
+			recorded = append(recorded, r)
+		} else {
+			unrecorded = append(unrecorded, r)
+		}
+	}
+	fmt.Fprintln(w, "record-deployment results (partial failure — every service was attempted):")
+	if len(recorded) > 0 {
+		fmt.Fprintln(w, "  Recorded (broker now shows these as deployed — no action needed):")
+		for _, r := range recorded {
+			fmt.Fprintf(w, "    - %s (%s@%s)\n", r.Service, r.Pacticipant, r.Version)
+		}
+	}
+	if len(unrecorded) > 0 {
+		fmt.Fprintln(w, "  NOT recorded (broker still shows the previous version deployed):")
+		for _, r := range unrecorded {
+			fmt.Fprintf(w, "    - %s (%s@%s): %s\n", r.Service, r.Pacticipant, r.Version, errString(r.Err))
+		}
+	}
+}
+
+func errString(err error) string {
+	if err == nil {
+		return "(unknown error)"
+	}
+	return err.Error()
 }
 
 func writeRollbackSection(w io.Writer, r *RollbackReport) {
@@ -79,6 +131,11 @@ func writeRollbackSection(w io.Writer, r *RollbackReport) {
 	switch {
 	case r.Skipped:
 		fmt.Fprintf(w, " skipped (%s)\n", r.SkipReason)
+		if r.ImageCaptureFailed {
+			fmt.Fprintf(w, "  root cause: pre-deploy image capture failed: %s\n", r.ImageCaptureFailReason)
+			fmt.Fprintln(w, "  Auto-rollback was not possible for this deploy — there was no recorded")
+			fmt.Fprintln(w, "  pre-deploy image to restore. Investigate and recover manually.")
+		}
 		return
 	case r.Mode == RollbackDryRun && r.Succeeded:
 		fmt.Fprintln(w, " dry-run (no changes applied)")

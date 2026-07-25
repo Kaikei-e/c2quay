@@ -111,6 +111,7 @@ func runDeploy(ctx context.Context, rt *runtimeCtx, onlyService string, dryRun b
 				PreSnapshotFile: report.PreSnapshotFile,
 				PostSnapshot:    report.Post,
 				Rollback:        report.Rollback,
+				RecordResults:   report.RecordResults,
 			}.Write(rt.stderr)
 		}
 		return classifyDeployError(derr, report)
