@@ -100,7 +100,7 @@ func TestCanIDeploy_Deployable(t *testing.T) {
 		assert.Equal(t, "production", q.Get("environment"))
 		tr := true
 		_ = json.NewEncoder(w).Encode(map[string]any{
-			"summary": map[string]any{"deployable": &tr, "reason": "ok"},
+			"summary":               map[string]any{"deployable": &tr, "reason": "ok"},
 			"verificationResultUrl": "http://verify/123",
 		})
 	})

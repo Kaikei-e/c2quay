@@ -1,4 +1,4 @@
-.PHONY: all build test test-race lint vet integration e2e tidy clean
+.PHONY: all build test test-race lint vet e2e tidy clean
 
 BIN := bin/c2quay
 
@@ -19,9 +19,6 @@ vet:
 
 lint:
 	golangci-lint run ./...
-
-integration:
-	go test -tags=integration -count=1 ./test/integration/...
 
 e2e:
 	go test -tags=e2e -count=1 ./test/e2e/...

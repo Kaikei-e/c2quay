@@ -104,6 +104,28 @@ func TestLoad_PullPolicyRejectsUnknownValue(t *testing.T) {
 	assert.Contains(t, err.Error(), "deploy.pull")
 }
 
+// TestLoad_GateOnlyServiceParsed proves the gate_only field round-trips
+// through the YAML decoder and defaults to false when absent. See ADR 0013.
+func TestLoad_GateOnlyServiceParsed(t *testing.T) {
+	cfg, err := config.Load("testdata/gate_only.yml")
+	require.NoError(t, err)
+
+	env, ok := cfg.LookupEnvironment("production")
+	require.True(t, ok)
+	assert.False(t, env.Services["api"].GateOnly, "api must default to gate_only=false")
+	assert.True(t, env.Services["tts-speaker"].GateOnly)
+	assert.Equal(t, "tts-speaker", env.Services["tts-speaker"].Pacticipant)
+}
+
+// TestLoad_RejectsUnknownServiceField proves KnownFields strictness still
+// catches typos in the services block after adding gate_only (e.g.
+// `gate_onl` instead of `gate_only`).
+func TestLoad_RejectsUnknownServiceField(t *testing.T) {
+	_, err := config.Load("testdata/unknown_service_field.yml")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "gate_onl")
+}
+
 func readFile(t *testing.T, p string) string {
 	t.Helper()
 	b, err := os.ReadFile(p)

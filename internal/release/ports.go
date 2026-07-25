@@ -42,6 +42,9 @@ type ComposeDeployer interface {
 	Up(ctx context.Context, opts composeadapter.UpOptions, progress io.Writer) error
 	PsJSON(ctx context.Context) ([]composeadapter.ContainerStatus, error)
 	RenderConfigJSON(ctx context.Context) (*composeadapter.RenderedConfig, error)
+	// ConfigServices backs plan-time gate_only coverage validation. See
+	// ADR 0013.
+	ConfigServices(ctx context.Context) ([]string, error)
 }
 
 // UI is the progressive output surface used by orchestrators. output.Writer

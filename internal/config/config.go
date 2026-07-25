@@ -76,6 +76,16 @@ type Environment struct {
 // ServiceMapping is a Compose-service → Pact-pacticipant link.
 type ServiceMapping struct {
 	Pacticipant string `yaml:"pacticipant"`
+	// GateOnly marks a mapped service that is NOT declared in this box's
+	// Compose config — e.g. it runs on a separate host (a remote GPU
+	// worker, a managed dependency). GateOnly services are still included
+	// in the Pact gate (can-i-deploy / aggregate matrix) and in
+	// record-deployment, because the broker must still know their
+	// version is part of the release. They are excluded from every
+	// docker compose operation (up, pull, snapshot diff/rollback,
+	// force-recreate) — c2quay never expects to find them in
+	// `docker compose config`. See ADR 0013.
+	GateOnly bool `yaml:"gate_only"`
 }
 
 // Load reads and validates a c2quay config file.

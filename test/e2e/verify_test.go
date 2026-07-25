@@ -247,3 +247,26 @@ func TestE2E_Verify_AllOrNothing_FallsBackToDirectMatrix(t *testing.T) {
 	assert.Equal(t, 0, code, "stderr=%s stdout=%s", errOut, out)
 	assert.Contains(t, out, "Summary: 2/2 passed")
 }
+
+// TestE2E_Verify_ComposeCoverage_MissingService_FailsWithNotice proves the
+// M1 fix end to end: `c2quay verify` alone (no `deploy`) now catches the
+// exact incident class ADR 0013 fixed for deploy — a mapped, non-gate_only
+// service ("ghost") absent from compose.yaml — instead of passing verify
+// only for the operator to discover the gap later at deploy's hard
+// `compose up` failure. Like TestE2E_Deploy_GateOnly_MissingService_FailsBeforeGate,
+// this does not require a reachable Docker daemon: it only exercises
+// `docker compose config --services`, which does not need one; verify never
+// captures a compose snapshot (that's deploy/rollback-only), so there is no
+// other daemon-dependent step in this path.
+func TestE2E_Verify_ComposeCoverage_MissingService_FailsWithNotice(t *testing.T) {
+	bin := buildBinary(t)
+	srv := fakeBroker(t, true, "ok")
+	workDir := copyFixture(t, namedFixtureDir(t, "gate_only_missing"))
+
+	code, stdout, stderr := runC2Q(t, bin, workDir, srv.URL, "verify", "--env", "production")
+	combined := stdout + stderr
+
+	assert.Equal(t, 2, code, "verify must now fail on a compose coverage gap, stdout=%s stderr=%s", stdout, stderr)
+	assert.Contains(t, combined, `"ghost"`)
+	assert.Contains(t, combined, "gate_only: true")
+}

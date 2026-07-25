@@ -25,6 +25,21 @@ jobs:
       - run: go build ./...
       - run: go test -race -count=1 ./...
 
+  e2e:
+    # ubuntu-latest ships a live Docker daemon, so the e2e suite's
+    # docker-dependent cases (see requireDockerDaemon in test/e2e) actually
+    # run here instead of self-skipping like they do in a sandboxed dev run.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.26.x"
+          cache: true
+      - run: go test -tags=e2e -count=1 ./test/e2e/...
+
   lint:
     runs-on: ubuntu-latest
     steps:

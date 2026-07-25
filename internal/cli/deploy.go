@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"errors"
+	"io"
 	"log/slog"
 	"path/filepath"
 
@@ -103,19 +104,30 @@ func runDeploy(ctx context.Context, rt *runtimeCtx, onlyService string, dryRun b
 	})
 	if derr != nil {
 		if report != nil && report.FailedAtStep != "" {
-			release.RollbackHint{
-				Env:             rt.flags.envName,
-				FailedAt:        report.FailedAtStep,
-				Cause:           report.FailedCause,
-				PreSnapshot:     report.Pre,
-				PreSnapshotFile: report.PreSnapshotFile,
-				PostSnapshot:    report.Post,
-				Rollback:        report.Rollback,
-			}.Write(rt.stderr)
+			writeDeployFailureHint(rt.stderr, rt.flags.envName, report)
 		}
 		return classifyDeployError(derr, report)
 	}
 	return nil
+}
+
+// writeDeployFailureHint builds and prints the operator-facing rollback hint
+// for a failed deploy. Extracted from runDeploy so the RecordResults
+// itemization path (see 32d84c6 / ADR record-deployment partial-failure
+// fix) can be unit tested without a live broker or docker compose — report
+// is exactly what release.Deploy returns, so tests only need to construct
+// one.
+func writeDeployFailureHint(w io.Writer, envName string, report *release.DeployReport) {
+	release.RollbackHint{
+		Env:             envName,
+		FailedAt:        report.FailedAtStep,
+		Cause:           report.FailedCause,
+		PreSnapshot:     report.Pre,
+		PreSnapshotFile: report.PreSnapshotFile,
+		PostSnapshot:    report.Post,
+		Rollback:        report.Rollback,
+		RecordResults:   report.RecordResults,
+	}.Write(w)
 }
 
 func classifyDeployError(err error, report *release.DeployReport) error {

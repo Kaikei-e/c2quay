@@ -1,0 +1,6 @@
+{
+  "services": {
+    "api": {"version": "2026-07-25-api-ok", "image": "ghcr.io/example/api@sha256:abc"},
+    "tts-speaker": {"version": "2026-07-25-tts-ok", "image": "ghcr.io/example/tts-speaker@sha256:def"}
+  }
+}

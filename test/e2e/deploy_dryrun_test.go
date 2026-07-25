@@ -12,9 +12,12 @@ import (
 )
 
 // TestE2E_Deploy_DryRun_Pass runs `c2quay deploy --dry-run` against a fake
-// broker that says "deployable". --dry-run stops before compose up so we can
-// exercise the deploy pipeline without a real Docker involved.
+// broker that says "deployable". --dry-run stops before compose up, but the
+// pipeline still captures a pre-deploy snapshot via `docker compose ps`
+// first (see release.Deploy step 1), so this still requires a reachable
+// Docker daemon. See requireDockerDaemon (gate_only_test.go).
 func TestE2E_Deploy_DryRun_Pass(t *testing.T) {
+	requireDockerDaemon(t)
 	bin := buildBinary(t)
 	srv := fakeBroker(t, true, "ok")
 
@@ -42,7 +45,10 @@ func TestE2E_Deploy_DryRun_Pass(t *testing.T) {
 }
 
 // TestE2E_Deploy_GateFailed exits 1 and does not write a post-snapshot.
+// Also requires Docker for the same reason as TestE2E_Deploy_DryRun_Pass:
+// the pre-deploy snapshot runs before the gate check.
 func TestE2E_Deploy_GateFailed(t *testing.T) {
+	requireDockerDaemon(t)
 	bin := buildBinary(t)
 	srv := fakeBroker(t, false, "contracts not compatible")
 

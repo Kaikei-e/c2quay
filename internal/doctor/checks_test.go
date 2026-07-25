@@ -68,9 +68,9 @@ func TestVersionOrdering(t *testing.T) {
 
 func TestRun_AllGreen(t *testing.T) {
 	runner := scriptedRunner{responses: map[string]response{
-		key("docker", []string{"info", "--format", "{{.ServerVersion}}"}):         {out: []byte("29.4.0\n")},
-		key("docker-compose", []string{"version", "--short"}):                     {err: errors.New("not found")},
-		key("docker", []string{"compose", "version", "--format", "json"}):         {out: []byte(`{"version":"v2.40.2"}`)},
+		key("docker", []string{"info", "--format", "{{.ServerVersion}}"}): {out: []byte("29.4.0\n")},
+		key("docker-compose", []string{"version", "--short"}):             {err: errors.New("not found")},
+		key("docker", []string{"compose", "version", "--format", "json"}): {out: []byte(`{"version":"v2.40.2"}`)},
 	}}
 	r := doctor.Run(context.Background(), runner)
 	assert.True(t, r.AllOK(), "unexpected failure: %+v", r.Results)
@@ -78,9 +78,9 @@ func TestRun_AllGreen(t *testing.T) {
 
 func TestRun_HyphenatedComposeInstalled(t *testing.T) {
 	runner := scriptedRunner{responses: map[string]response{
-		key("docker", []string{"info", "--format", "{{.ServerVersion}}"}):         {out: []byte("29.4.0\n")},
-		key("docker-compose", []string{"version", "--short"}):                     {out: []byte("1.29.2")},
-		key("docker", []string{"compose", "version", "--format", "json"}):         {out: []byte(`{"version":"v2.40.2"}`)},
+		key("docker", []string{"info", "--format", "{{.ServerVersion}}"}): {out: []byte("29.4.0\n")},
+		key("docker-compose", []string{"version", "--short"}):             {out: []byte("1.29.2")},
+		key("docker", []string{"compose", "version", "--format", "json"}): {out: []byte(`{"version":"v2.40.2"}`)},
 	}}
 	r := doctor.Run(context.Background(), runner)
 	assert.False(t, r.AllOK())
@@ -96,9 +96,9 @@ func TestRun_HyphenatedComposeInstalled(t *testing.T) {
 
 func TestRun_ComposeTooOld(t *testing.T) {
 	runner := scriptedRunner{responses: map[string]response{
-		key("docker", []string{"info", "--format", "{{.ServerVersion}}"}):         {out: []byte("29.4.0")},
-		key("docker-compose", []string{"version", "--short"}):                     {err: errors.New("not found")},
-		key("docker", []string{"compose", "version", "--format", "json"}):         {out: []byte(`{"version":"v2.40.1"}`)},
+		key("docker", []string{"info", "--format", "{{.ServerVersion}}"}): {out: []byte("29.4.0")},
+		key("docker-compose", []string{"version", "--short"}):             {err: errors.New("not found")},
+		key("docker", []string{"compose", "version", "--format", "json"}): {out: []byte(`{"version":"v2.40.1"}`)},
 	}}
 	r := doctor.Run(context.Background(), runner)
 	assert.False(t, r.AllOK())
