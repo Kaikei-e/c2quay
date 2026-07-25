@@ -37,19 +37,7 @@ func runStatus(ctx context.Context, rt *runtimeCtx) error {
 	if err != nil {
 		return &ExitError{Code: ExitOperatorError, Err: err}
 	}
-	if len(cs) == 0 {
-		tw.Warn("compose state", "no containers for project "+rt.cfg.Compose.ProjectName)
-	} else {
-		for _, c := range cs {
-			label := fmt.Sprintf("container %s (service %s)", c.Name, c.Service)
-			detail := fmt.Sprintf("state=%s health=%s status=%s", c.State, c.Health, c.Status)
-			if c.State == "running" && (c.Health == "healthy" || c.Health == "") {
-				tw.Ok(label, detail)
-			} else {
-				tw.Warn(label, detail)
-			}
-		}
-	}
+	renderComposeState(tw, rt.cfg.Compose.ProjectName, cs)
 
 	// Confirm the environment exists in the broker. Useful for catching typos.
 	bc, err := broker.New(broker.Options{
@@ -64,19 +52,60 @@ func runStatus(ctx context.Context, rt *runtimeCtx) error {
 		tw.Fail("broker reachable", err.Error())
 		return &ExitError{Code: ExitOperatorError, Err: err}
 	}
-	if bc.HasRelation("pb:environments") {
-		exists, err := bc.EnvironmentExists(ctx, rt.flags.envName)
-		if err != nil {
-			tw.Fail("broker environment check", err.Error())
-			return &ExitError{Code: ExitOperatorError, Err: err}
-		}
-		if exists {
-			tw.Ok("broker environment", rt.flags.envName+" is known to the broker")
+	if err := checkBrokerEnvironment(ctx, tw, bc, rt.flags.envName); err != nil {
+		return &ExitError{Code: ExitOperatorError, Err: err}
+	}
+	return nil
+}
+
+// renderComposeState prints one line per container: Ok when running and
+// either healthy or health-unset, Warn otherwise (or when there are no
+// containers at all). Extracted from runStatus so the formatting logic is
+// unit-testable without a live docker daemon.
+func renderComposeState(tw output.Writer, projectName string, cs []composeadapter.ContainerStatus) {
+	if len(cs) == 0 {
+		tw.Warn("compose state", "no containers for project "+projectName)
+		return
+	}
+	for _, c := range cs {
+		label := fmt.Sprintf("container %s (service %s)", c.Name, c.Service)
+		detail := fmt.Sprintf("state=%s health=%s status=%s", c.State, c.Health, c.Status)
+		if c.State == "running" && (c.Health == "healthy" || c.Health == "") {
+			tw.Ok(label, detail)
 		} else {
-			tw.Fail("broker environment", rt.flags.envName+" is NOT registered; run `pact-broker create-environment`")
+			tw.Warn(label, detail)
 		}
-	} else {
+	}
+}
+
+// environmentChecker is the subset of *broker.Client that
+// checkBrokerEnvironment needs. Declared here (not in broker/) so tests can
+// substitute a fake without a live broker.
+type environmentChecker interface {
+	HasRelation(rel string) bool
+	EnvironmentExists(ctx context.Context, name string) (bool, error)
+}
+
+// checkBrokerEnvironment confirms envName is registered with the broker,
+// printing the outcome via tw. It returns a non-nil error only when the
+// EnvironmentExists call itself fails (a broker-reachability problem); an
+// environment that is simply not registered is reported via tw.Fail but is
+// not, by itself, a command failure — this mirrors runStatus's pre-extraction
+// behaviour exactly. Extracted so it is unit-testable with a fake broker.
+func checkBrokerEnvironment(ctx context.Context, tw output.Writer, bc environmentChecker, envName string) error {
+	if !bc.HasRelation("pb:environments") {
 		tw.Warn("broker environment", "broker does not expose pb:environments")
+		return nil
+	}
+	exists, err := bc.EnvironmentExists(ctx, envName)
+	if err != nil {
+		tw.Fail("broker environment check", err.Error())
+		return err
+	}
+	if exists {
+		tw.Ok("broker environment", envName+" is known to the broker")
+	} else {
+		tw.Fail("broker environment", envName+" is NOT registered; run `pact-broker create-environment`")
 	}
 	return nil
 }

@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -40,12 +41,16 @@ const defaultRetryBaseDelay = 500 * time.Millisecond
 // broker's index resource rather than hard-coding URLs, so it continues to
 // work as the broker evolves its routes.
 type Client struct {
-	base           *url.URL
-	http           *http.Client
-	auth           AuthMethod
-	log            *slog.Logger
-	index          *Index
-	calls          int
+	base  *url.URL
+	http  *http.Client
+	auth  AuthMethod
+	log   *slog.Logger
+	index *Index
+	// calls counts HTTP attempts made via doOnce. It is incremented from
+	// concurrent goroutines whenever gate checks fan out across services
+	// (see release.gateIndividual, ParallelismDefault), so it must be
+	// atomic rather than a plain int.
+	calls          atomic.Int64
 	retryBaseDelay time.Duration
 }
 
@@ -103,7 +108,7 @@ func (c *Client) Start(ctx context.Context) error {
 
 // APICallCount returns the number of HTTP requests this client has made to the
 // broker since construction. Useful for audit logs.
-func (c *Client) APICallCount() int { return c.calls }
+func (c *Client) APICallCount() int { return int(c.calls.Load()) }
 
 // Link returns the HAL link for a relation, or ErrRelationMissing.
 func (c *Client) Link(rel string) (Link, error) {
@@ -246,7 +251,7 @@ func (c *Client) doOnce(ctx context.Context, method, urlStr string, bodyBytes []
 	}
 	c.auth.Apply(req)
 
-	c.calls++
+	c.calls.Add(1)
 	resp, err := c.http.Do(req)
 	if err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {

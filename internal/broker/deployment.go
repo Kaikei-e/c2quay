@@ -25,7 +25,7 @@ type RecordDeploymentInput struct {
 
 // Relation names used by the record-deployment flow.
 const (
-	RelRecordDeployment  = "pb:record-deployment"
+	RelRecordDeployment   = "pb:record-deployment"
 	RelPacticipantVersion = "pb:pacticipant-version"
 )
 

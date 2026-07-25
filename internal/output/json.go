@@ -7,11 +7,11 @@ import (
 
 // Report is the machine-readable output schema for verify/deploy.
 type Report struct {
-	Env      string         `json:"env"`
-	Command  string         `json:"command"`
+	Env      string          `json:"env"`
+	Command  string          `json:"command"`
 	Results  []ServiceResult `json:"results"`
-	Summary  ReportSummary  `json:"summary"`
-	AuditURL string         `json:"audit_url,omitempty"`
+	Summary  ReportSummary   `json:"summary"`
+	AuditURL string          `json:"audit_url,omitempty"`
 }
 
 type ServiceResult struct {

@@ -12,10 +12,10 @@ import (
 
 func TestParseShortOption(t *testing.T) {
 	cases := []struct {
-		in           string
-		wantShort    int
+		in             string
+		wantShort      int
 		wantRecognised bool
-		wantErr      bool
+		wantErr        bool
 	}{
 		{"", 0, false, false},
 		{"true", -1, true, false},
@@ -29,8 +29,8 @@ func TestParseShortOption(t *testing.T) {
 		{"7", 7, true, false},
 		{"12", 12, true, false},
 		{"40", 40, true, false},
-		{"41", 0, false, true},  // too long
-		{"-1", 0, false, true},  // negative via string rejected
+		{"41", 0, false, true}, // too long
+		{"-1", 0, false, true}, // negative via string rejected
 		{"abc", 0, false, true},
 	}
 	for _, c := range cases {
